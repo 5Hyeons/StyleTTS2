@@ -20,14 +20,30 @@ logger.setLevel(logging.DEBUG)
 
 import pandas as pd
 
-_pad = "$"
-_punctuation = ';:,.!?¡¿—…"«»“” '
-_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-_letters_ipa = "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
+# _pad = "$"
+# _punctuation = ';:,.!?¡¿—…"«»“” '
+# _letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+# _letters_ipa = "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
 
-# Export all symbols:
-symbols = [_pad] + list(_punctuation) + list(_letters) + list(_letters_ipa)
+# # Export all symbols:
+# symbols = [_pad] + list(_punctuation) + list(_letters) + list(_letters_ipa)
 
+
+PAD = '_'
+BOS = '<bos>'
+EOS = '<eos>'
+PUNC = '!?\'\"().,-=:;^&*~'
+SPACE = ' '
+_SILENCES = ['sp', 'spn', 'sil']
+
+JAMO_LEADS = "".join([chr(_) for _ in range(0x1100, 0x1113)])
+JAMO_VOWELS = "".join([chr(_) for _ in range(0x1161, 0x1176)])
+JAMO_TAILS = "".join([chr(_) for _ in range(0x11A8, 0x11C3)])
+
+VALID_CHARS = JAMO_LEADS + JAMO_VOWELS + JAMO_TAILS + PUNC + SPACE
+symbols = [PAD] + [BOS] + [EOS] + list(VALID_CHARS) + _SILENCES
+
+#---
 dicts = {}
 for i in range(len((symbols))):
     dicts[symbols[i]] = i
@@ -85,6 +101,8 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.sr = sr
 
         self.df = pd.DataFrame(self.data_list)
+
+        print(f'Number of speakers: {len(self.df[2].unique())}')
 
         self.to_melspec = torchaudio.transforms.MelSpectrogram(**MEL_PARAMS)
 
