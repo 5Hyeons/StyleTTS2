@@ -10,7 +10,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
+# from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
+from torch.nn.utils.parametrizations import spectral_norm, weight_norm
 
 from Utils.ASR.models import ASRCNN
 from Utils.JDC.model import JDCNet
@@ -699,7 +700,18 @@ def load_checkpoint(model, optimizer, path, load_only_params=True, ignore_module
     for key in model:
         if key in params and key not in ignore_modules:
             print('%s loaded' % key)
-            model[key].load_state_dict(params[key], strict=False)
+            try:
+                model[key].load_state_dict(params[key], strict=True)
+            except:
+                from collections import OrderedDict
+                state_dict = params[key]
+                new_state_dict = OrderedDict()
+                print(f'{key} key lenghth: {len(model[key].state_dict().keys())}, state_dict length: {len(state_dict.keys())}')
+                for (k_m, k_c), (k_c, v_c) in zip(model[key].state_dict().items(), state_dict.items()):
+                    new_state_dict[k_m] = v_c
+                model[key].load_state_dict(new_state_dict, strict=True)
+
+
     _ = [model[key].eval() for key in model]
     
     if not load_only_params:

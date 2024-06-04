@@ -31,6 +31,9 @@ from Modules.diffusion.sampler import DiffusionSampler, ADPM2Sampler, KarrasSche
 
 from optimizers import build_optimizer
 
+import pdb
+
+
 # simple fix for dataparallel that allows access to class attributes
 class MyDataParallel(torch.nn.DataParallel):
     def __getattr__(self, name):
@@ -121,7 +124,7 @@ def main(config_path):
     
     # load PL-BERT model
     BERT_path = config.get('PLBERT_dir', False)
-    plbert = load_plbert(BERT_path)
+    plbert = load_plbert(BERT_path, use_checkpoint=False)
     
     # build model
     model_params = recursive_munch(config['model_params'])
@@ -155,9 +158,10 @@ def main(config_path):
             epochs += start_epoch
             
             model.predictor_encoder = copy.deepcopy(model.style_encoder)
+            # pdb.set_trace()
         else:
             raise ValueError('You need to specify the path to the first stage model.') 
-
+    
     gl = GeneratorLoss(model.mpd, model.msd).to(device)
     dl = DiscriminatorLoss(model.mpd, model.msd).to(device)
     wl = WavLMLoss(model_params.slm.model, 
@@ -273,17 +277,16 @@ def main(config_path):
                     s2s_attn = s2s_attn[..., 1:]
                     s2s_attn = s2s_attn.transpose(-1, -2)
                 except:
+                    print('Error in alignment !!!')
                     continue
 
                 mask_ST = mask_from_lens(s2s_attn, input_lengths, mel_input_length // (2 ** n_down))
                 s2s_attn_mono = maximum_path(s2s_attn, mask_ST)
-
                 # encode
                 t_en = model.text_encoder(texts, input_lengths, text_mask)
                 asr = (t_en @ s2s_attn_mono)
 
                 d_gt = s2s_attn_mono.sum(axis=-1).detach()
-                
                 # compute reference styles
                 if multispeaker and epoch >= diff_epoch:
                     ref_ss = model.style_encoder(ref_mels.unsqueeze(1))
@@ -389,6 +392,8 @@ def main(config_path):
                 
                 y_rec_gt = wav.unsqueeze(1)
                 y_rec_gt_pred = model.decoder(en, F0_real, N_real, s)
+                
+                # pdb.set_trace()
 
                 if epoch >= joint_epoch:
                     # ground truth from recording
@@ -681,6 +686,8 @@ def main(config_path):
         writer.add_scalar('eval/mel_loss', loss_test / iters_test, epoch + 1)
         writer.add_scalar('eval/dur_loss', loss_align / iters_test, epoch + 1)
         writer.add_scalar('eval/F0_loss', loss_f / iters_test, epoch + 1)
+        attn_image = get_image(s2s_attn_mono[0].cpu().numpy().squeeze())
+        writer.add_figure('eval/attn2', attn_image, epoch)
         
         if epoch < joint_epoch:
             # generating reconstruction examples with GT duration
