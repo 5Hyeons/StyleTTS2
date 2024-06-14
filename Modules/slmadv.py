@@ -19,8 +19,12 @@ class SLMAdversarialLoss(torch.nn.Module):
         
     def forward(self, iters, y_rec_gt, y_rec_gt_pred, waves, mel_input_length, ref_text, ref_lengths, use_ind, s_trg, ref_s=None):
         text_mask = length_to_mask(ref_lengths).to(ref_text.device)
-        bert_dur = self.model.bert(ref_text, attention_mask=(~text_mask).int())
-        d_en = self.model.bert_encoder(bert_dur).transpose(-1, -2) 
+        # bert_dur = self.model.bert(ref_text, attention_mask=(~text_mask).int())
+        # d_en = self.model.bert_encoder(bert_dur).transpose(-1, -2) 
+        d_en = self.model.prosodic_text_encoder(ref_text, ref_lengths, text_mask)
+        d_en_dur = d_en.transpose(-1, -2)
+
+
         
         if use_ind and np.random.rand() < 0.5:
             s_preds = s_trg
@@ -28,14 +32,14 @@ class SLMAdversarialLoss(torch.nn.Module):
             num_steps = np.random.randint(3, 5)
             if ref_s is not None:
                 s_preds = self.sampler(noise = torch.randn_like(s_trg).unsqueeze(1).to(ref_text.device), 
-                      embedding=bert_dur,
+                      embedding=d_en_dur,
                       embedding_scale=1,
                                features=ref_s, # reference from the same speaker as the embedding
                          embedding_mask_proba=0.1,
                          num_steps=num_steps).squeeze(1)
             else:
                 s_preds = self.sampler(noise = torch.randn_like(s_trg).unsqueeze(1).to(ref_text.device), 
-                      embedding=bert_dur,
+                      embedding=d_en_dur,
                       embedding_scale=1,
                          embedding_mask_proba=0.1,
                          num_steps=num_steps).squeeze(1)
@@ -176,7 +180,6 @@ class SLMAdversarialLoss(torch.nn.Module):
 
                 # regularization (ignore reconstruction artifacts)
                 d_loss += F.l1_loss(out_gt, out_rec)
-
             else:
                 d_loss = self.wl.discriminator(wav.detach().squeeze(), y_pred.detach().squeeze()).mean()
         else:
