@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torchaudio
-from transformers import AutoModel
+from transformers import AutoModel, Wav2Vec2Model, Wav2Vec2FeatureExtractor
 
 class SpectralConvergengeLoss(torch.nn.Module):
     """Spectral convergence loss module."""
@@ -188,28 +188,72 @@ class DiscriminatorLoss(torch.nn.Module):
         d_loss = loss_disc_s + loss_disc_f + loss_rel
         
         return d_loss.mean()
-   
+
+
+class PretrainedWav2Vec2(nn.Module):
+    def __init__(self, model_name):
+        super().__init__()
+        self.processor = Wav2Vec2FeatureExtractor.from_pretrained(model_name)
+        self.model = Wav2Vec2Model.from_pretrained(model_name)
+
+        # No masking on features
+        self.model.config.mask_time_prob = 0.0
+        self.model.config.mask_feature_prob = 0.0
+
+    def forward(self, input_values, output_hidden_states):
+        """
+        audio: (batch_size, audio_length)
+        audio_mask: (batch_size, audio_length)
+        """
+        audio = self.process_audio(input_values.squeeze(1))
+        audio_mask = torch.ones_like(audio)
+        
+        audio_enc_out = self.model(audio, attention_mask=audio_mask, output_hidden_states=output_hidden_states, return_dict=True)
+        
+        return audio_enc_out
+
+    def process_audio(self, audio):
+        input_values = self.processor(
+            audio, 
+            sampling_rate=16000, 
+            return_tensors="pt", 
+            return_attention_mask=False
+        ).to(audio.device)
+        return input_values['input_values'][0]
+
     
 class WavLMLoss(torch.nn.Module):
 
     def __init__(self, model, wd, model_sr, slm_sr=16000):
         super(WavLMLoss, self).__init__()
-        self.wavlm = AutoModel.from_pretrained(model)
+        if 'wavlm' in model:
+            self.wavlm = AutoModel.from_pretrained(model)
+        elif 'wav2vec2' in model:
+            self.wavlm = PretrainedWav2Vec2(model)
+        print(f'Loaded {model} for WavLM')
         self.wd = wd
+        self.model = model
         self.resample = torchaudio.transforms.Resample(model_sr, slm_sr)
-     
-    def forward(self, wav, y_rec):
-        with torch.no_grad():
-            wav_16 = self.resample(wav)
-            wav_embeddings = self.wavlm(input_values=wav_16, output_hidden_states=True).hidden_states
-        y_rec_16 = self.resample(y_rec)
-        y_rec_embeddings = self.wavlm(input_values=y_rec_16.squeeze(), output_hidden_states=True).hidden_states
 
-        floss = 0
-        for er, eg in zip(wav_embeddings, y_rec_embeddings):
-            floss += torch.mean(torch.abs(er - eg))
-        
-        return floss.mean()
+    def forward(self, wav, y_rec):
+        if 'wavlm' in self.model:
+            wav = self.resample(wav)
+            y_rec = self.resample(y_rec)
+        with torch.no_grad():
+            wav_embeddings = self.wavlm(input_values=wav, output_hidden_states=True).hidden_states
+        y_rec_embeddings = self.wavlm(input_values=y_rec.squeeze(), output_hidden_states=True).hidden_states
+
+        if self.model == 'kresnik/wav2vec2-large-xlsr-korean':
+            wav_embeddings = torch.stack(wav_embeddings, dim=1).transpose(-1, -2).flatten(start_dim=1, end_dim=2)
+            y_rec_embeddings = torch.stack(y_rec_embeddings, dim=1).transpose(-1, -2).flatten(start_dim=1, end_dim=2)
+
+            floss = torch.mean(torch.abs(wav_embeddings - y_rec_embeddings))    
+        else:
+            floss = 0
+            for er, eg in zip(wav_embeddings, y_rec_embeddings):
+                floss += torch.mean(torch.abs(er - eg))
+    
+        return floss    
     
     def generator(self, y_rec):
         y_rec_16 = self.resample(y_rec)
