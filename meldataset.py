@@ -57,6 +57,7 @@ class TextCleaner:
             try:
                 indexes.append(self.word_index_dictionary[char])
             except KeyError:
+                print(f"Unknown character: {char}")
                 print(text)
         return indexes
 
@@ -131,6 +132,8 @@ class FilePathDataset(torch.utils.data.Dataset):
         
         acoustic_feature = mel_tensor.squeeze()
         length_feature = acoustic_feature.size(1)
+        if length_feature / 16 < 5:
+            print(f"Too short wav file (less than 1s): {path}")
         acoustic_feature = acoustic_feature[:, :(length_feature - length_feature % 2)]
         
         # get reference sample
@@ -155,13 +158,13 @@ class FilePathDataset(torch.utils.data.Dataset):
 
     def _load_tensor(self, data):
         wave_path, text, speaker_id = data
-        speaker_id = int(speaker_id)
+        # speaker_id = int(speaker_id)
         wave, sr = sf.read(osp.join(self.root_path, wave_path))
         if wave.shape[-1] == 2:
             wave = wave[:, 0].squeeze()
         if sr != 24000:
             wave = librosa.resample(wave, orig_sr=sr, target_sr=24000)
-            print(wave_path, sr)
+            # print(wave_path, sr)
             
         wave = np.concatenate([np.zeros([5000]), wave, np.zeros([5000])], axis=0)
         
@@ -213,7 +216,7 @@ class Collater(object):
         max_text_length = max([b[2].shape[0] for b in batch])
         max_rtext_length = max([b[3].shape[0] for b in batch])
 
-        labels = torch.zeros((batch_size)).long()
+        # labels = torch.zeros((batch_size)).long()
         mels = torch.zeros((batch_size, nmels, max_mel_length)).float()
         texts = torch.zeros((batch_size, max_text_length)).long()
         ref_texts = torch.zeros((batch_size, max_rtext_length)).long()
@@ -222,7 +225,7 @@ class Collater(object):
         ref_lengths = torch.zeros(batch_size).long()
         output_lengths = torch.zeros(batch_size).long()
         ref_mels = torch.zeros((batch_size, nmels, self.max_mel_length)).float()
-        ref_labels = torch.zeros((batch_size)).long()
+        # ref_labels = torch.zeros((batch_size)).long()
         paths = ['' for _ in range(batch_size)]
         waves = [None for _ in range(batch_size)]
         
@@ -230,7 +233,7 @@ class Collater(object):
             mel_size = mel.size(1)
             text_size = text.size(0)
             rtext_size = ref_text.size(0)
-            labels[bid] = label
+            # labels[bid] = label
             mels[bid, :, :mel_size] = mel
             texts[bid, :text_size] = text
             ref_texts[bid, :rtext_size] = ref_text
@@ -241,7 +244,7 @@ class Collater(object):
             ref_mel_size = ref_mel.size(1)
             ref_mels[bid, :, :ref_mel_size] = ref_mel
             
-            ref_labels[bid] = ref_label
+            # ref_labels[bid] = ref_label
             waves[bid] = wave
 
         return waves, texts, input_lengths, ref_texts, ref_lengths, mels, output_lengths, ref_mels
