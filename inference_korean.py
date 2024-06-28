@@ -1,4 +1,3 @@
-import parser
 import torch
 torch.manual_seed(0)
 torch.backends.cudnn.benchmark = False
@@ -65,6 +64,29 @@ class TextCleaner:
 
 textclenaer = TextCleaner()
 
+def create_textgrid_from_tokens(tokens, output_path):
+    # NLTK does not provide direct TextGrid support, so we manually create the content
+
+    textgrid_content = 'File type = "ooTextFile"\nObject class = "TextGrid"\n\n'
+    textgrid_content += 'xmin = 0\n'
+    textgrid_content += f'xmax = {tokens[-1][-2]}\n'
+    textgrid_content += 'tiers? <exists>\nsize = 1\nitem []:\n'
+    textgrid_content += '    item [1]:\n        class = "IntervalTier"\n'
+    textgrid_content += '        name = "words"\n'
+    textgrid_content += f'        xmin = 0\n        xmax = {tokens[-1][-2]}\n'
+    textgrid_content += f'        intervals: size = {len(tokens)}\n'
+
+    for i, (s, e, word) in enumerate(tokens):
+        textgrid_content += f'        intervals [{i+1}]:\n'
+        textgrid_content += f'            xmin = {s}\n'
+        textgrid_content += f'            xmax = {e}\n'
+        textgrid_content += f'            text = "{word}"\n'
+
+    with open(output_path, 'w', encoding='UTF-8') as f:
+        f.write(textgrid_content)
+
+    return output_path
+
 def length_to_mask(lengths):
     mask = torch.arange(lengths.max()).unsqueeze(0).expand(lengths.shape[0], -1).type_as(lengths)
     mask = torch.gt(mask+1, lengths.unsqueeze(1))
@@ -129,7 +151,7 @@ def get_model(config, ckpt_path):
     return model, model_params, sampler
 
 def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7, diffusion_steps=5, embedding_scale=1):
-    text = text.strip()
+    # text = text.strip()
     tokens = textclenaer(text)
     tokens.insert(0, 0)
     tokens.append(0)
@@ -163,6 +185,20 @@ def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7
 
         duration = torch.sigmoid(duration).sum(axis=-1)
         pred_dur = torch.round(duration.squeeze()).clamp(min=1)
+        intervals = []
+            
+        for i, (ph, dur) in enumerate(zip(tokens[0], pred_dur)):
+            if not intervals:
+                start = 0
+            else:
+                start = intervals[-1][1]
+            end = start + (dur * 300) / 24000 * 2
+            end = round(end.item(), 4)
+            
+            token = id_to_sym[ph.item()]
+            # if token == 'ᆫ' and dur > 15:
+            #     pred_dur[i] = 5
+            intervals.append((start, end, token))
 
 
         pred_aln_trg = torch.zeros(input_lengths, int(pred_dur.sum().data))
@@ -170,7 +206,6 @@ def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7
         for i in range(pred_aln_trg.size(0)):
             pred_aln_trg[i, c_frame:c_frame + int(pred_dur[i].data)] = 1
             c_frame += int(pred_dur[i].data)
-
         # encode prosody
         en = (d.transpose(-1, -2) @ pred_aln_trg.unsqueeze(0).to(device))
         if model_params.decoder.type == "hifigan":
@@ -188,8 +223,7 @@ def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7
             asr = asr_new
         out = model.decoder(asr, 
                                 F0_pred, N_pred, ref.squeeze().unsqueeze(0))
-        
-    return out.squeeze().cpu().numpy()[..., :-50] # weird pulse at the end of the model, need to be fixed later
+    return out.squeeze().cpu().numpy()[..., :-50], intervals # weird pulse at the end of the model, need to be fixed later
 
 
 def main(args):
@@ -217,7 +251,7 @@ def main(args):
     silence = np.zeros(int(24000 * 0.5)) # 0.5 sec silence for interval
     for i, text in enumerate(texts):
         start = time.time()
-        wav = inference(model, model_params, sampler, text, ref_s, alpha=0.3, beta=0.7, diffusion_steps=16, embedding_scale=1)
+        wav, intervals = inference(model, model_params, sampler, text, ref_s, alpha=0.5, beta=0.7, diffusion_steps=16, embedding_scale=1)
         wavs.append(wav)
         wavs.append(silence)
         rtf = (time.time() - start) / (len(wav) / 24000)
@@ -227,15 +261,17 @@ def main(args):
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     sf.write(output_path, audio, 24000, format='WAV', subtype='PCM_16')
+    create_textgrid_from_tokens(intervals, output_path.replace('.wav', '.TextGrid'))
+
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 parser = argparse.ArgumentParser(description='StyleTTS2 Inference')
-parser.add_argument('-c', '--config_path', type=str, default='Configs/config_aihub_va_female.yml', help='path to the config file')
-parser.add_argument('-m', '--model_path', type=str, default='Models/aihub_va_female/epoch_2nd_00029.pth', help='path to the model')
-parser.add_argument('-r', '--ref_wav_path', type=str, default='../../datasets/AIHUB/voice_actor/female_24k/K/K-NX-F-008-0303.wav', help='path to the reference wav file')
-parser.add_argument('-t', '--text', type=str, default='플루언트는 2021년에 설립되었고, 생성형 AI의 \'움직임\'을 표현하는 기술을 개발하는 회사입니다. 현재는 대화형 AI 버추얼 휴먼 솔루션인 톡모션에이아이 개발에 집중하고 있습니다.', help='text to synthesize')
+parser.add_argument('-c', '--config_path', type=str, default='Models/sugar/config_ft_sugar.yml', help='path to the config file')
+parser.add_argument('-m', '--model_path', type=str, default='Models/sugar/epoch_2nd_00249.pth', help='path to the model')
+parser.add_argument('-r', '--ref_wav_path', type=str, default='wavs/sugar/sugar_0173.wav', help='path to the reference wav file')
+parser.add_argument('-t', '--text', type=str, default='어 플루언트는 2021년에 설립되었고, 그 생성형 AI의 \'움직임\'을 표현하는 기술을 개발하는 회사입니다. 현재는 어 대화형 AI 버추얼 휴먼 솔루션인 그 톡모션에이아이 개발에 집중하고 있습니다.', help='text to synthesize')
 parser.add_argument('--texts', type=str, default='', help='path to the text file to synthesize')
 args = parser.parse_args()
 
