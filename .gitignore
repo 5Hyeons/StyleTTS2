@@ -3,3 +3,6 @@ __pycache__
 *.txt
 *.ipynb
 *.cleaned
+*.pth
+*.TextGrid
+Models/
