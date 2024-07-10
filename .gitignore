@@ -1,6 +1,7 @@
 __pycache__
 *.wav
 *.txt
+*.yml
 *.ipynb
 *.cleaned
 *.pth

@@ -42,6 +42,7 @@ class TextCleaner:
                 indexes.append(self.word_index_dictionary[char])
             except KeyError:
                 print(text)
+                print(f'invalid char: {char}')
         return indexes
 
 np.random.seed(1)
