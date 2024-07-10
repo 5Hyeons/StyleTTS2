@@ -1,5 +1,5 @@
 log_dir: "Models/aihub_va_all"
-first_stage_path: ""
+first_stage_path: "epoch_1st_00009.pth"
 save_freq: 1
 log_interval: 10
 device: "cuda"
@@ -7,7 +7,7 @@ epochs_1st: 10 # number of epochs for first stage training (pre-training)
 epochs_2nd: 8 # number of peochs for second stage training (joint training)
 batch_size: 8
 max_len: 250 # maximum number of frames
-pretrained_model: "Models/aihub_va_all/epoch_1st_00002.pth"
+pretrained_model: ""
 second_stage_load_pretrained: false # set to true if the pre-trained model is for 2nd stage
 load_only_params: false # set to true if do not want to load epoch numbers and optimizer parameters
 
@@ -17,9 +17,9 @@ ASR_path: "Utils/ASR/epoch_00080.pth"
 PLBERT_dir: 'Utils/PLBERT/'
 
 data_params:
-  train_data: "Data/train_aihub_va_all_filelist.txt.cleaned"
-  val_data: "Data/valid_aihub_va_all_filelist.txt.cleaned"
-  root_path: "../../datasets/AIHUB/voice_actor/Training/original"
+  train_data: "Data/train_aihub_va_all_tagged_filelist.txt.cleaned"
+  val_data: "Data/valid_aihub_va_all_tagged_filelist.txt.cleaned"
+  root_path: "../../datasets/AIHUB/voice_actor/Training_24k/original"
   OOD_data: "Data/OOD_texts_korean2.txt"
   min_length: 50 # sample until texts with this size are obtained for OOD texts
 
@@ -56,7 +56,6 @@ model_params:
       
   # speech language model config
   slm:
-      # model: 'microsoft/wavlm-base-plus'
       model: 'kresnik/wav2vec2-large-xlsr-korean'
       sr: 16000 # sampling rate of SLM
       hidden: 1024 # hidden size of SLM
