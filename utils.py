@@ -39,8 +39,10 @@ def get_data_path_list(train_path=None, val_path=None):
 
     return train_list, val_list
 
-def length_to_mask(lengths):
-    mask = torch.arange(lengths.max()).unsqueeze(0).expand(lengths.shape[0], -1).type_as(lengths)
+def length_to_mask(lengths, max_len=None):
+    if max_len is None:
+        max_len = lengths.max().item()
+    mask = torch.arange(max_len).unsqueeze(0).expand(lengths.shape[0], -1).type_as(lengths)
     mask = torch.gt(mask+1, lengths.unsqueeze(1))
     return mask
 

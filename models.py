@@ -10,6 +10,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch_geometric.data import HeteroData
 # from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
 from torch.nn.utils.parametrizations import spectral_norm, weight_norm
 
@@ -21,6 +22,8 @@ from Modules.diffusion.modules import Transformer1d, StyleTransformer1d
 from Modules.diffusion.diffusion import AudioDiffusionConditional
 
 from Modules.discriminators import MultiPeriodDiscriminator, MultiResSpecDiscriminator, WavLMDiscriminator
+
+from Modules.heteroGraph import HGT
 
 from munch import Munch
 import yaml
@@ -635,7 +638,9 @@ def build_model(args, text_aligner, pitch_extractor, bert):
         
     text_encoder = TextEncoder(channels=args.hidden_dim, kernel_size=5, depth=args.n_layer, n_symbols=args.n_token)
     
-    predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=args.hidden_dim, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
+    # predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=args.hidden_dim, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
+    predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=bert.config.hidden_size, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
+
     
     style_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # acoustic style encoder
     predictor_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # prosodic style encoder
@@ -669,10 +674,18 @@ def build_model(args, text_aligner, pitch_extractor, bert):
     diffusion.diffusion.net = transformer
     diffusion.unet = transformer
 
+    data = HeteroData()
+    data["acoustic"], data["prosody"], data["text"]
+
+    data["acoustic", "to", "prosody"],  data["acoustic", "to", "text"], data["prosody", "to", "text"], 
+    data["acoustic", "to", "acoustic"], data["prosody", "to", "prosody"], data["text", "to", "text"],
+
+    data["prosody", "rev_to", "acoustic"], data["text", "rev_to", "acoustic"], data["text", "rev_to", "prosody"]
+
+    hgt = HGT(hidden_channels=384, out_channels=768, num_heads=2, num_layers=1, data=data)
     
     nets = Munch(
             bert=bert,
-            bert_encoder=nn.Linear(bert.config.hidden_size, args.hidden_dim),
 
             predictor=predictor,
             decoder=decoder,
@@ -690,8 +703,11 @@ def build_model(args, text_aligner, pitch_extractor, bert):
         
             # slm discriminator head
             wd = WavLMDiscriminator(args.slm.hidden, args.slm.nlayers, args.slm.initial_channel),
+
+            # HeteroGraphTransformer
+            hgt = hgt
        )
-    
+
     return nets
 
 def load_checkpoint(model, optimizer, path, load_only_params=True, ignore_modules=[]):

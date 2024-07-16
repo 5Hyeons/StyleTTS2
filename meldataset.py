@@ -75,6 +75,7 @@ class FilePathDataset(torch.utils.data.Dataset):
                  validation=False,
                  OOD_data="Data/OOD_texts.txt",
                  min_length=50,
+                 max_history_len=0
                  ):
 
         spect_params = SPECT_PARAMS
@@ -100,6 +101,8 @@ class FilePathDataset(torch.utils.data.Dataset):
         self.ptexts = [t.split('|')[idx] for t in tl]
         
         self.root_path = root_path
+
+        self.max_history_len = max_history_len
 
     def __len__(self):
         return len(self.data_list)
@@ -133,8 +136,52 @@ class FilePathDataset(torch.utils.data.Dataset):
             text.append(0)
 
             ref_text = torch.LongTensor(text)
-        
-        return speaker_id, acoustic_feature, text_tensor, ref_text, ref_mel_tensor, ref_label, path, wave
+
+        # get historical information
+        dialogue_id = path.split('/')[0]
+        turn = int(path.split('/')[1].split('_')[0])
+        turn = min(turn, self.max_history_len)
+        if turn > 0:
+            history_text_tensors = []
+            history_text_lengths = []
+            history_acoustic_features = []
+            for i in range(idx - turn, idx, 1):
+                data_past = self.data_list[i]
+                wave_past, text_tensor_past, speaker_id_past = self._load_tensor(data_past)
+                mel_tensor_past = preprocess(wave_past).squeeze()
+                acoustic_feature_past = mel_tensor_past.squeeze()
+                length_feature_past = acoustic_feature_past.size(1)
+                acoustic_feature_past = acoustic_feature_past[:, :(length_feature_past - length_feature_past % 2)]
+
+                history_text_tensors.append(text_tensor_past)
+                history_text_lengths.append(text_tensor_past.size(0))
+                history_acoustic_features.append(acoustic_feature_past)
+            # add current text
+            history_text_tensors.append(text_tensor)
+            history_text_lengths.append(text_tensor.size(0))
+            history_text_lengths = torch.tensor(history_text_lengths)
+
+            # text padding
+            # max_history_text_len = max(history_text_lengths)
+            # history_text_tensors = [F.pad(t, (0, max_history_text_len - t.size(0)), value=0) for t in history_text_tensors]
+            # history_text_tensors = torch.stack(history_text_tensors, dim=0)
+            history = {
+                "history_len": turn,
+                "history_text_tensors": history_text_tensors,
+                "history_text_lengths": history_text_lengths,
+                "history_max_text_length": max(history_text_lengths),
+                "history_acoustic_features": history_acoustic_features,
+            }
+        else:
+            history = {
+                "history_len": 0,
+                "history_text_tensors": [text_tensor],
+                "history_text_lengths": torch.tensor([text_tensor.size(0)]),
+                "history_max_text_length": text_tensor.size(0),
+                "history_acoustic_features": None,
+            }
+
+        return speaker_id, acoustic_feature, text_tensor, ref_text, ref_mel_tensor, ref_label, path, wave, history
 
     def _load_tensor(self, data):
         wave_path, text, speaker_id = data
@@ -195,10 +242,12 @@ class Collater(object):
         max_mel_length = max([b[1].shape[1] for b in batch])
         max_text_length = max([b[2].shape[0] for b in batch])
         max_rtext_length = max([b[3].shape[0] for b in batch])
+        max_history_text_length = max([b[8]["history_max_text_length"] for b in batch])
 
         # labels = torch.zeros((batch_size)).long()
         mels = torch.zeros((batch_size, nmels, max_mel_length)).float()
-        texts = torch.zeros((batch_size, max_text_length)).long()
+        # texts = torch.zeros((batch_size, max_text_length)).long()
+        texts = torch.zeros((batch_size, max_history_text_length)).long()
         ref_texts = torch.zeros((batch_size, max_rtext_length)).long()
 
         input_lengths = torch.zeros(batch_size).long()
@@ -208,8 +257,9 @@ class Collater(object):
         # ref_labels = torch.zeros((batch_size)).long()
         paths = ['' for _ in range(batch_size)]
         waves = [None for _ in range(batch_size)]
+        histories = [None for _ in range(batch_size)]
         
-        for bid, (label, mel, text, ref_text, ref_mel, ref_label, path, wave) in enumerate(batch):
+        for bid, (label, mel, text, ref_text, ref_mel, ref_label, path, wave, history) in enumerate(batch):
             mel_size = mel.size(1)
             text_size = text.size(0)
             rtext_size = ref_text.size(0)
@@ -226,23 +276,31 @@ class Collater(object):
             
             # ref_labels[bid] = ref_label
             waves[bid] = wave
+            # history_text_tensors padding by max_text_length
+            if history is not None:
+                history_len = len(history["history_text_tensors"])
+                history_text_tensors = torch.zeros((history_len, max_history_text_length)).long()
+                for i in range(history_len):
+                    history_text_length = history["history_text_lengths"][i]
+                    history_text_tensors[i, :history_text_length] = history["history_text_tensors"][i]
+                history["history_text_tensors"] = history_text_tensors
+            histories[bid] = history
 
-        return waves, texts, input_lengths, ref_texts, ref_lengths, mels, output_lengths, ref_mels
-
-
+        return waves, texts, input_lengths, ref_texts, ref_lengths, mels, output_lengths, ref_mels, histories
 
 def build_dataloader(path_list,
                      root_path,
                      validation=False,
                      OOD_data="Data/OOD_texts.txt",
                      min_length=50,
+                     max_history_len=10,
                      batch_size=4,
                      num_workers=1,
                      device='cpu',
                      collate_config={},
                      dataset_config={}):
     
-    dataset = FilePathDataset(path_list, root_path, OOD_data=OOD_data, min_length=min_length, validation=validation, **dataset_config)
+    dataset = FilePathDataset(path_list, root_path, OOD_data=OOD_data, min_length=min_length, max_history_len=max_history_len, validation=validation, **dataset_config)
     collate_fn = Collater(**collate_config)
     data_loader = DataLoader(dataset,
                              batch_size=batch_size,
