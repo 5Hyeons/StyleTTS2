@@ -647,7 +647,7 @@ def main(config_path):
                     texts, input_lengths, ref_texts, ref_lengths, mels, mel_input_length, ref_mels = batch
                     with torch.no_grad():
                         mask = length_to_mask(mel_input_length // (2 ** n_down)).to('cuda')
-                        text_mask = length_to_mask(input_lengths).to(texts.device)
+                        text_mask = length_to_mask(input_lengths, max_len=texts.size(1)).to(texts.device)
 
                         _, _, s2s_attn = model.text_aligner(mels, mask, texts)
                         s2s_attn = s2s_attn.transpose(-1, -2)
