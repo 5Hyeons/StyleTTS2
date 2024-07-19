@@ -18,7 +18,7 @@ class SLMAdversarialLoss(torch.nn.Module):
         self.skip_update = skip_update
         
     def forward(self, iters, y_rec_gt, y_rec_gt_pred, waves, mel_input_length, ref_text, ref_lengths, use_ind, s_trg, ref_s=None):
-        text_mask = length_to_mask(ref_lengths).to(ref_text.device)
+        text_mask = length_to_mask(ref_lengths, max_len=ref_text.size(1)).to(ref_text.device)
         bert_dur = self.model.bert(ref_text, attention_mask=(~text_mask).int())
         d_en = bert_dur.transpose(-1, -2) 
         
@@ -45,7 +45,7 @@ class SLMAdversarialLoss(torch.nn.Module):
 
         d, _ = self.model.predictor(d_en, s_dur, 
                                                 ref_lengths, 
-                                                torch.randn(ref_lengths.shape[0], ref_lengths.max(), 2).to(ref_text.device), 
+                                                torch.randn(ref_text.shape[0], ref_text.shape[1], 2).to(ref_text.device), 
                                                 text_mask)
 
         bib = 0
@@ -81,7 +81,7 @@ class SLMAdversarialLoss(torch.nn.Module):
         with torch.no_grad():
             t_en = self.model.text_encoder(ref_text, ref_lengths, text_mask)
             
-        s2s_attn = torch.zeros(len(ref_lengths), int(ref_lengths.max()), max_len).to(ref_text.device)
+        s2s_attn = torch.zeros(ref_text.shape[0], ref_text.shape[1], max_len).to(ref_text.device)
         for bib in range(len(output_lengths)):
             s2s_attn[bib, :ref_lengths[bib], :output_lengths[bib]] = attn_preds[bib]
 
@@ -189,7 +189,9 @@ class SLMAdversarialLoss(torch.nn.Module):
         
         return d_loss, gen_loss, y_pred.detach().cpu().numpy()
     
-def length_to_mask(lengths):
-    mask = torch.arange(lengths.max()).unsqueeze(0).expand(lengths.shape[0], -1).type_as(lengths)
+def length_to_mask(lengths, max_len=None):
+    if max_len is None:
+        max_len = lengths.max().item()
+    mask = torch.arange(max_len).unsqueeze(0).expand(lengths.shape[0], -1).type_as(lengths)
     mask = torch.gt(mask+1, lengths.unsqueeze(1))
     return mask
