@@ -253,8 +253,10 @@ def main(config_path):
 
         _ = [model[key].eval() for key in model]
 
+        model.style_predictor.train()
         model.predictor.train()
         model.bert.train()
+        model.bert_encoder.train()
         model.msd.train()
         model.mpd.train()
         model.hgt.train()
@@ -272,7 +274,7 @@ def main(config_path):
             with torch.no_grad():
                 mask = length_to_mask(mel_input_length // (2 ** n_down)).to(device)
                 mel_mask = length_to_mask(mel_input_length).to(device)
-                text_mask = length_to_mask(input_lengths, max_len=texts.size(1)).to(texts.device)
+                text_mask = length_to_mask(input_lengths).to(texts.device)
 
                 try:
                     _, _, s2s_attn = model.text_aligner(mels, mask, texts)
@@ -308,10 +310,7 @@ def main(config_path):
                 history_len = history["history_len"]
                 if history_len > 0:
                     history_text_tensors = history["history_text_tensors"]
-                    history_text_lengths = history["history_text_lengths"]
-                    history_text_mask = length_to_mask(history_text_lengths, max_len=history_text_tensors.size(1)).to(history_text_tensors.device)
-                    history_bert_dur = model.bert(history_text_tensors, attention_mask=(~history_text_mask).int())
-
+                    history_text_tensors = torch.stack(history_text_tensors)
                     history_acoustic_features = history["history_acoustic_features"]
                     history_ss = []
                     history_gs = []
@@ -328,7 +327,7 @@ def main(config_path):
                         history_gs = history_gs.unsqueeze(0)
 
                     data = HeteroData()
-                    data["text"].x = history_bert_dur
+                    data["text"].x = history_text_tensors
                     data["acoustic"].x = history_ss
                     data["prosody"].x = history_gs
 
@@ -356,12 +355,17 @@ def main(config_path):
                     data = T.ToUndirected()(data)
 
                     data, model.hgt = data.to(device), model.hgt.to(device)
-                    out_text = model.hgt(data.x_dict, data.edge_index_dict, texts[bib].size(0))
-                    out_text = history_bert_dur[-1] + out_text.mean(0)
-                    # out_text = out_text[-1].unsqueeze(0)
-                    bert_dur.append(out_text.unsqueeze(0))
+                    out_text = model.hgt(data.x_dict, data.edge_index_dict)
+
+                    q = out_text[-1].unsqueeze(0).unsqueeze(0)
+                    k = v = out_text[:-1].unsqueeze(0)
+                    style = model.style_predictor(q, k, v)[0] # (1, 1, 256)
                 else:
-                    bert_dur.append(model.bert(texts[bib].unsqueeze(0), attention_mask=(~text_mask[bib].unsqueeze(0)).int()))
+                    style = torch.zeros(1, 1, 256).to(device)
+
+                h_bert = model.bert(texts[bib].unsqueeze(0), attention_mask=(~text_mask[bib].unsqueeze(0)).int())
+                h_bert = torch.cat([h_bert, style.expand(-1, h_bert.size(1), -1)], dim=-1)
+                bert_dur.append(h_bert)
 
                 # current style
                 mel_length = int(mel_input_length[bib].item())
@@ -372,7 +376,8 @@ def main(config_path):
                 gs.append(s)
 
             bert_dur = torch.stack(bert_dur).squeeze()
-            d_en = bert_dur.transpose(-1, -2)
+            d_en = model.bert_encoder(bert_dur).transpose(-1, -2) 
+            # d_en = bert_dur.transpose(-1, -2)
             
             s_dur = torch.stack(ss).squeeze()  # global prosodic styles
             gs = torch.stack(gs).squeeze() # global acoustic styles
@@ -526,9 +531,11 @@ def main(config_path):
                 set_trace()
 
             optimizer.step('bert')
+            optimizer.step('bert_encoder')
             optimizer.step('predictor')
             optimizer.step('predictor_encoder')
             optimizer.step('hgt')
+            optimizer.step('style_predictor')
             
             if epoch >= diff_epoch:
                 optimizer.step('diffusion')
@@ -646,7 +653,7 @@ def main(config_path):
                     texts, input_lengths, ref_texts, ref_lengths, mels, mel_input_length, ref_mels = batch
                     with torch.no_grad():
                         mask = length_to_mask(mel_input_length // (2 ** n_down)).to('cuda')
-                        text_mask = length_to_mask(input_lengths, max_len=texts.size(1)).to(texts.device)
+                        text_mask = length_to_mask(input_lengths).to(texts.device)
 
                         _, _, s2s_attn = model.text_aligner(mels, mask, texts)
                         s2s_attn = s2s_attn.transpose(-1, -2)
@@ -677,8 +684,13 @@ def main(config_path):
                     gs = torch.stack(gs).squeeze()
                     s_trg = torch.cat([s, gs], dim=-1).detach()
 
-                    bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
-                    d_en = bert_dur.transpose(-1, -2)
+                    # bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
+                    h_bert = model.bert(texts, attention_mask=(~text_mask).int())
+                    style = torch.zeros(h_bert.size(0), 1, 256).to(h_bert.device)
+                    bert_dur = torch.cat([h_bert, style.expand(-1, h_bert.size(1), -1)], dim=-1)
+        
+                    d_en = model.bert_encoder(bert_dur).transpose(-1, -2) 
+                    # d_en = bert_dur.transpose(-1, -2)
                     d, p = model.predictor(d_en, s, 
                                                         input_lengths, 
                                                         s2s_attn_mono, 

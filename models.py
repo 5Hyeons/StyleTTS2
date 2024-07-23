@@ -167,6 +167,60 @@ class StyleEncoder(nn.Module):
     
         return s
 
+class StylePredictor(nn.Module):
+    """ （Multi-Head Attention） """
+
+    # input:
+    #     query --- [N, T_q, query_dim]
+    #     key --- [N, T_k, key_dim]
+    #     mask --- [N, T_k]
+    # output:
+    #     out --- [N, T_q, num_units]
+    #     scores -- [h, N, T_q, T_k]
+
+    def __init__(self, query_dim, key_dim, num_units, num_heads):
+        super(StylePredictor, self).__init__()
+        self.num_units = num_units
+        self.num_heads = num_heads
+        self.key_dim = key_dim
+
+        self.W_query = nn.Linear(in_features=query_dim, out_features=num_units, bias=False)
+        self.W_key = nn.Linear(in_features=key_dim, out_features=num_units, bias=False)
+        self.W_value = nn.Linear(in_features=key_dim, out_features=num_units, bias=False)
+
+    def forward(self, query, key, value, mask=None):
+        # Add convolution layer
+        # ///////
+
+        querys = self.W_query(query)  # [N, T_q, num_units]
+        keys = self.W_key(key)  # [N, T_k, num_units]
+        values = self.W_value(value)
+
+        split_size = self.num_units // self.num_heads
+        querys = torch.stack(torch.split(querys, split_size, dim=2), dim=0)  # [h, N, T_q, num_units/h]
+        keys = torch.stack(torch.split(keys, split_size, dim=2), dim=0)  # [h, N, T_k, num_units/h]
+        values = torch.stack(torch.split(values, split_size, dim=2), dim=0)  # [h, N, T_k, num_units/h]
+
+        ## score = softmax(QK^T / (d_k ** 0.5))
+        scores = torch.matmul(querys, keys.transpose(2, 3))  # [h, N, T_q, T_k]
+        scores = scores / (self.key_dim ** 0.5)
+
+        ## mask
+        if mask is not None:
+            ## mask:  [N, T_k] --> [h, N, T_q, T_k]
+            mask = mask.unsqueeze(1).unsqueeze(0).repeat(self.num_heads, 1, querys.shape[2], 1)
+            scores = scores.masked_fill(mask, -np.inf)
+        scores = F.softmax(scores, dim=3)
+
+        ## out = score * V
+        out = torch.matmul(scores, values)  # [h, N, T_q, num_units/h]
+        out = torch.cat(torch.split(out, 1, dim=0), dim=3).squeeze(0)  # [N, T_q, num_units]
+
+        # Add Full Connection Layer
+        # /////////
+
+        return out, scores
+
 class LinearNorm(torch.nn.Module):
     def __init__(self, in_dim, out_dim, bias=True, w_init_gain='linear'):
         super(LinearNorm, self).__init__()
@@ -638,28 +692,29 @@ def build_model(args, text_aligner, pitch_extractor, bert):
         
     text_encoder = TextEncoder(channels=args.hidden_dim, kernel_size=5, depth=args.n_layer, n_symbols=args.n_token)
     
-    # predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=args.hidden_dim, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
-    predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=bert.config.hidden_size, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
-
+    predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=args.hidden_dim, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
+    # predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=bert.config.hidden_size, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
     
     style_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # acoustic style encoder
     predictor_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # prosodic style encoder
-        
+    
+    style_predictor = StylePredictor(query_dim=384, key_dim=384, num_units=256, num_heads=2)
+
     # define diffusion model
     if args.multispeaker:
         transformer = StyleTransformer1d(channels=args.style_dim*2, 
-                                    context_embedding_features=bert.config.hidden_size,
+                                    context_embedding_features=bert.config.hidden_size + 256,
                                     context_features=args.style_dim*2, 
                                     **args.diffusion.transformer)
     else:
         transformer = Transformer1d(channels=args.style_dim*2, 
-                                    context_embedding_features=bert.config.hidden_size,
+                                    context_embedding_features=bert.config.hidden_size + 256,
                                     **args.diffusion.transformer)
     
     diffusion = AudioDiffusionConditional(
         in_channels=1,
         embedding_max_length=bert.config.max_position_embeddings,
-        embedding_features=bert.config.hidden_size,
+        embedding_features=bert.config.hidden_size + 256,
         embedding_mask_proba=args.diffusion.embedding_mask_proba, # Conditional dropout of batch elements,
         channels=args.style_dim*2,
         context_features=args.style_dim*2,
@@ -682,10 +737,11 @@ def build_model(args, text_aligner, pitch_extractor, bert):
 
     data["prosody", "rev_to", "acoustic"], data["text", "rev_to", "acoustic"], data["text", "rev_to", "prosody"]
 
-    hgt = HGT(hidden_channels=384, out_channels=768, num_heads=2, num_layers=1, data=data)
+    hgt = HGT(hidden_channels=384, out_channels=384, num_heads=2, num_layers=1, data=data)
     
     nets = Munch(
             bert=bert,
+            bert_encoder=nn.Linear(bert.config.hidden_size + 256, args.hidden_dim),
 
             predictor=predictor,
             decoder=decoder,
@@ -693,6 +749,7 @@ def build_model(args, text_aligner, pitch_extractor, bert):
 
             predictor_encoder=predictor_encoder,
             style_encoder=style_encoder,
+            style_predictor=style_predictor,
             diffusion=diffusion,
 
             text_aligner = text_aligner,
@@ -723,7 +780,7 @@ def load_checkpoint(model, optimizer, path, load_only_params=True, ignore_module
                 state_dict = params[key]
                 new_state_dict = OrderedDict()
                 print(f'{key} key lenghth: {len(model[key].state_dict().keys())}, state_dict length: {len(state_dict.keys())}')
-                for (k_m, k_c), (k_c, v_c) in zip(model[key].state_dict().items(), state_dict.items()):
+                for (k_m, v_m), (k_c, v_c) in zip(model[key].state_dict().items(), state_dict.items()):
                     new_state_dict[k_m] = v_c
                 model[key].load_state_dict(new_state_dict, strict=True)
 

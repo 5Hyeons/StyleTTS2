@@ -143,41 +143,32 @@ class FilePathDataset(torch.utils.data.Dataset):
         turn = min(turn, self.max_history_len)
         if turn > 0:
             history_text_tensors = []
-            history_text_lengths = []
             history_acoustic_features = []
             for i in range(idx - turn, idx, 1):
                 data_past = self.data_list[i]
-                wave_past, text_tensor_past, speaker_id_past = self._load_tensor(data_past)
+                wave_past = self._load_wav(data_past[0])
+                text_emb_past = self._load_emb(data_past[0].replace('.wav', '.npy'))
+                # wave_past, text_tensor_past, speaker_id_past = self._load_tensor(data_past)
                 mel_tensor_past = preprocess(wave_past).squeeze()
                 acoustic_feature_past = mel_tensor_past.squeeze()
                 length_feature_past = acoustic_feature_past.size(1)
                 acoustic_feature_past = acoustic_feature_past[:, :(length_feature_past - length_feature_past % 2)]
 
-                history_text_tensors.append(text_tensor_past)
-                history_text_lengths.append(text_tensor_past.size(0))
+                history_text_tensors.append(text_emb_past)
                 history_acoustic_features.append(acoustic_feature_past)
             # add current text
-            history_text_tensors.append(text_tensor)
-            history_text_lengths.append(text_tensor.size(0))
-            history_text_lengths = torch.tensor(history_text_lengths)
+            history_text_tensors.append(self._load_emb(path.replace('.wav', '.npy')))
 
             # text padding
-            # max_history_text_len = max(history_text_lengths)
-            # history_text_tensors = [F.pad(t, (0, max_history_text_len - t.size(0)), value=0) for t in history_text_tensors]
-            # history_text_tensors = torch.stack(history_text_tensors, dim=0)
             history = {
                 "history_len": turn,
                 "history_text_tensors": history_text_tensors,
-                "history_text_lengths": history_text_lengths,
-                "history_max_text_length": max(history_text_lengths),
                 "history_acoustic_features": history_acoustic_features,
             }
         else:
             history = {
                 "history_len": 0,
-                "history_text_tensors": [text_tensor],
-                "history_text_lengths": torch.tensor([text_tensor.size(0)]),
-                "history_max_text_length": text_tensor.size(0),
+                "history_text_tensors": None,
                 "history_acoustic_features": None,
             }
 
@@ -214,6 +205,23 @@ class FilePathDataset(torch.utils.data.Dataset):
             mel_tensor = mel_tensor[:, random_start:random_start + self.max_mel_length]
 
         return mel_tensor, speaker_id
+    
+    def _load_wav(self, path):
+        wave, sr = sf.read(osp.join(self.root_path, path))
+        if wave.shape[-1] == 2:
+            wave = wave[:, 0].squeeze()
+        if sr != 24000:
+            wave = librosa.resample(wave, orig_sr=sr, target_sr=24000)
+            # print(wave_path, sr)
+        
+        wave = np.concatenate([np.zeros([5000]), wave, np.zeros([5000])], axis=0)
+        
+        return wave
+
+    def _load_emb(self, path):
+        emb = torch.from_numpy(np.load(osp.join(self.root_path, path))).float()
+        return emb
+
 
 
 class Collater(object):
@@ -242,12 +250,10 @@ class Collater(object):
         max_mel_length = max([b[1].shape[1] for b in batch])
         max_text_length = max([b[2].shape[0] for b in batch])
         max_rtext_length = max([b[3].shape[0] for b in batch])
-        max_history_text_length = max([b[8]["history_max_text_length"] for b in batch])
 
         # labels = torch.zeros((batch_size)).long()
         mels = torch.zeros((batch_size, nmels, max_mel_length)).float()
-        # texts = torch.zeros((batch_size, max_text_length)).long()
-        texts = torch.zeros((batch_size, max_history_text_length)).long()
+        texts = torch.zeros((batch_size, max_text_length)).long()
         ref_texts = torch.zeros((batch_size, max_rtext_length)).long()
 
         input_lengths = torch.zeros(batch_size).long()
@@ -276,14 +282,6 @@ class Collater(object):
             
             # ref_labels[bid] = ref_label
             waves[bid] = wave
-            # history_text_tensors padding by max_text_length
-            if history is not None:
-                history_len = len(history["history_text_tensors"])
-                history_text_tensors = torch.zeros((history_len, max_history_text_length)).long()
-                for i in range(history_len):
-                    history_text_length = history["history_text_lengths"][i]
-                    history_text_tensors[i, :history_text_length] = history["history_text_tensors"][i]
-                history["history_text_tensors"] = history_text_tensors
             histories[bid] = history
 
         return waves, texts, input_lengths, ref_texts, ref_lengths, mels, output_lengths, ref_mels, histories

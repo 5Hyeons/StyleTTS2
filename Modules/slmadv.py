@@ -18,10 +18,12 @@ class SLMAdversarialLoss(torch.nn.Module):
         self.skip_update = skip_update
         
     def forward(self, iters, y_rec_gt, y_rec_gt_pred, waves, mel_input_length, ref_text, ref_lengths, use_ind, s_trg, ref_s=None):
-        text_mask = length_to_mask(ref_lengths, max_len=ref_text.size(1)).to(ref_text.device)
-        bert_dur = self.model.bert(ref_text, attention_mask=(~text_mask).int())
-        d_en = bert_dur.transpose(-1, -2) 
-        
+        text_mask = length_to_mask(ref_lengths).to(ref_text.device)
+        h_bert = self.model.bert(ref_text, attention_mask=(~text_mask).int())
+        style = torch.zeros(h_bert.size(0), 1, 256).to(h_bert.device)
+        bert_dur = torch.cat([h_bert, style.expand(-1, h_bert.size(1), -1)], dim=-1)
+        d_en = self.model.bert_encoder(bert_dur).transpose(-1, -2) 
+        # d_en = bert_dur.transpose(-1, -2)
         if use_ind and np.random.rand() < 0.5:
             s_preds = s_trg
         else:
@@ -189,9 +191,8 @@ class SLMAdversarialLoss(torch.nn.Module):
         
         return d_loss, gen_loss, y_pred.detach().cpu().numpy()
     
-def length_to_mask(lengths, max_len=None):
-    if max_len is None:
-        max_len = lengths.max().item()
+def length_to_mask(lengths):
+    max_len = lengths.max().item()
     mask = torch.arange(max_len).unsqueeze(0).expand(lengths.shape[0], -1).type_as(lengths)
     mask = torch.gt(mask+1, lengths.unsqueeze(1))
     return mask
