@@ -39,7 +39,7 @@ class HGT(nn.Module):
         for conv in self.convs:
             x_dict = conv(x_dict, edge_index_dict)
 
-        out_text = x_dict['text'][-1]
+        out_text = x_dict['text']
         out_text = self.lin(out_text)
 
         return out_text

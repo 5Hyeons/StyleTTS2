@@ -357,7 +357,7 @@ def main(config_path):
 
                     data, model.hgt = data.to(device), model.hgt.to(device)
                     out_text = model.hgt(data.x_dict, data.edge_index_dict, texts[bib].size(0))
-                    out_text = history_bert_dur[-1] + out_text
+                    out_text = history_bert_dur[-1] + out_text.mean(0)
                     # out_text = out_text[-1].unsqueeze(0)
                     bert_dur.append(out_text.unsqueeze(0))
                 else:
@@ -538,8 +538,7 @@ def main(config_path):
                 optimizer.step('decoder')
         
                 # randomly pick whether to use in-distribution text
-                # if np.random.rand() < 0.5:
-                if np.random.rand() < 0.0:
+                if np.random.rand() < 0.5:
                     use_ind = True
                 else:
                     use_ind = False
