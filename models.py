@@ -698,7 +698,7 @@ def build_model(args, text_aligner, pitch_extractor, bert):
     style_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # acoustic style encoder
     predictor_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # prosodic style encoder
     
-    style_predictor = StylePredictor(query_dim=384, key_dim=384, num_units=256, num_heads=2)
+    style_predictor = StylePredictor(query_dim=512, key_dim=384, num_units=256, num_heads=2)
 
     # define diffusion model
     if args.multispeaker:

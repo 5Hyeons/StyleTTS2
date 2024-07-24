@@ -309,6 +309,7 @@ def main(config_path):
                 history = histories[bib]
                 history_len = history["history_len"]
                 if history_len > 0:
+                    current_text_tensor = history["current_text_tensor"]
                     history_text_tensors = history["history_text_tensors"]
                     history_text_tensors = torch.stack(history_text_tensors)
                     history_acoustic_features = history["history_acoustic_features"]
@@ -357,7 +358,7 @@ def main(config_path):
                     data, model.hgt = data.to(device), model.hgt.to(device)
                     out_text = model.hgt(data.x_dict, data.edge_index_dict)
 
-                    q = out_text[-1].unsqueeze(0).unsqueeze(0)
+                    q = current_text_tensor.unsqueeze(0).unsqueeze(0)
                     k = v = out_text[:-1].unsqueeze(0)
                     style = model.style_predictor(q, k, v)[0] # (1, 1, 256)
                 else:

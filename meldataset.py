@@ -157,10 +157,12 @@ class FilePathDataset(torch.utils.data.Dataset):
                 history_text_tensors.append(text_emb_past)
                 history_acoustic_features.append(acoustic_feature_past)
             # add current text
-            history_text_tensors.append(self._load_emb(path.replace('.wav', '.npy')))
+            current_text_tensor = self._load_emb(path.replace('.wav', '.npy'))
+            history_text_tensors.append(current_text_tensor)
 
             # text padding
             history = {
+                "current_text_tensor": current_text_tensor,
                 "history_len": turn,
                 "history_text_tensors": history_text_tensors,
                 "history_acoustic_features": history_acoustic_features,
