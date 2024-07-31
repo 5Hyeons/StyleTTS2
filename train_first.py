@@ -179,7 +179,8 @@ def main(config_path):
 
         for i, batch in enumerate(train_dataloader):
             waves = batch[0]
-            batch = [b.to(device) for b in batch[1:]]
+            batch = [b.to(device) for b in batch[1:-1]]
+            history = batch[-1]
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch
             
             with torch.no_grad():
@@ -332,7 +333,8 @@ def main(config_path):
                 optimizer.zero_grad()
 
                 waves = batch[0]
-                batch = [b.to(device) for b in batch[1:]]
+                batch = [b.to(device) for b in batch[1:-1]]
+                history = batch[-1]
                 texts, input_lengths, _, _, mels, mel_input_length, _ = batch
 
                 with torch.no_grad():

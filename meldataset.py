@@ -119,8 +119,9 @@ class FilePathDataset(torch.utils.data.Dataset):
         length_feature = acoustic_feature.size(1)
         acoustic_feature = acoustic_feature[:, :(length_feature - length_feature % 2)]
         
-        # get reference sample
-        ref_data = (self.df[self.df[2] == str(speaker_id)]).sample(n=1).iloc[0].tolist()
+        # get reference sample from neutral speaker, this is only for dailytalk dataset
+        speaker_id = '0_neutral' if speaker_id[0] == '0' else '1_neutral'
+        ref_data = (self.df[self.df[2] == speaker_id]).sample(n=1).iloc[0].tolist()
         ref_mel_tensor, ref_label = self._load_data(ref_data[:3])
         
         # get OOD text
