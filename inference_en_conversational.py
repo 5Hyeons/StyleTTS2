@@ -33,6 +33,7 @@ import phonemizer
 global_phonemizer = phonemizer.backend.EspeakBackend(language='en-us', preserve_punctuation=True,  with_stress=True)
 from nltk.tokenize import word_tokenize
 # IPA Phonemizer: https://github.com/bootphon/phonemizer
+from sentence_transformers import SentenceTransformer
 
 _pad = "$"
 _punctuation = ';:,.!?¡¿—…"«»“” '
@@ -60,7 +61,9 @@ class TextCleaner:
                 print(text)
         return indexes
 
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
 textclenaer = TextCleaner()
+text_embedder = SentenceTransformer('distiluse-base-multilingual-cased-v1', device='cpu')
 
 def create_textgrid_from_tokens(tokens, output_path):
     # NLTK does not provide direct TextGrid support, so we manually create the content
@@ -127,19 +130,19 @@ def get_model(config, ckpt_path, plbert):
     ignore_modules = ['text_aligner', 'pitch_extractor', 'mpd', 'msd', 'wd']
     for key in model:
         if key in params and key not in ignore_modules:
+            # try:
+            #     model[key].load_state_dict(params[key], strict=True)
+            # except:
+            from collections import OrderedDict
+            state_dict = params[key]
+            new_state_dict = OrderedDict()
+            print(f'{key} key lenghth: {len(model[key].state_dict().keys())}, state_dict length: {len(state_dict.keys())}')
+            for (k_m, v_m), (k_c, v_c) in zip(model[key].state_dict().items(), state_dict.items()):
+                new_state_dict[k_m] = v_c
+            model[key].load_state_dict(new_state_dict, strict=True)
+            model[key].eval()
+            model[key].to(device)
             print('%s loaded' % key)
-            try:
-                model[key].load_state_dict(params[key], strict=True)
-            except:
-                from collections import OrderedDict
-                state_dict = params[key]
-                new_state_dict = OrderedDict()
-                print(f'{key} key lenghth: {len(model[key].state_dict().keys())}, state_dict length: {len(state_dict.keys())}')
-                for (k_m, v_m), (k_c, v_c) in zip(model[key].state_dict().items(), state_dict.items()):
-                    new_state_dict[k_m] = v_c
-                model[key].load_state_dict(new_state_dict, strict=True)
-                model[key].eval()
-                model[key].to(device)
 
     sampler = DiffusionSampler(
         model.diffusion.diffusion,
@@ -152,6 +155,8 @@ def get_model(config, ckpt_path, plbert):
 
 def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7, diffusion_steps=5, embedding_scale=1, history=None):
     text = text.strip()
+    text_emb = text_embedder.encode([text])
+    history['text'].append(torch.tensor(text_emb).to(device))
     # ps = text.strip()
     ps = global_phonemizer.phonemize([text])
     ps = word_tokenize(ps[0])
@@ -168,15 +173,11 @@ def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7
 
         t_en = model.text_encoder(tokens, input_lengths, text_mask)
 
-        bert_dur = model.bert(tokens, attention_mask=(~text_mask).int())
-        history['text'].append(bert_dur.detach())
+        h_bert = model.bert(tokens, attention_mask=(~text_mask).int())
+        # history['text'].append(h_bert.detach())
 
-        if len(history['text']) > 1000:
+        if len(history['text']) > 2:
             data = HeteroData()
-            # text padding
-            max_text_len = max([h.size(1) for h in history['text']])
-            for i in range(len(history['text'])):
-                history['text'][i] = torch.cat([history['text'][i], torch.zeros(1, max_text_len - history['text'][i].size(1), 768).to(history['text'][i].device)], dim=1)
             text_tensor = torch.cat(history['text'], dim=0)
             acoustic_tensor = torch.cat(history['acoustic'], dim=0)
             prosody_tensor = torch.cat(history['prosody'], dim=0)
@@ -210,14 +211,19 @@ def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7
 
             data, model.hgt = data.to(device), model.hgt.to(device)
             out_text = model.hgt(data.x_dict, data.edge_index_dict)
-            bert_dur = bert_dur + out_text.mean(0)
+            current_text_tensor = history['text'][-1]
+            q = current_text_tensor.unsqueeze(0).unsqueeze(0)
+            k = v = out_text[:-1].unsqueeze(0)
+            s_conv = model.style_predictor(q, k, v)[0] # [1, 1, 256]
+
         else:
             print('im here')
-        # d_en = model.bert_encoder(bert_dur).transpose(-1, -2) 
-        d_en = bert_dur.transpose(-1, -2)
+        # d_en = model.bert_encoder(h_bert).transpose(-1, -2) 
+        h_bert = torch.cat([h_bert, s_conv.expand(-1, h_bert.size(1), -1)], dim=-1)
+        d_en = model.bert_encoder(h_bert).transpose(-1, -2)
         
         s_pred = sampler(noise = torch.randn((1, 256)).unsqueeze(1).to(device), 
-                                          embedding=bert_dur,
+                                          embedding=h_bert,
                                           embedding_scale=embedding_scale,
                                             features=ref_s, # reference from the same speaker as the embedding
                                              num_steps=diffusion_steps).squeeze(1)
@@ -278,7 +284,9 @@ def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7
 
 
 def main(args):
-    config = yaml.safe_load(open(args.config_path))
+    model_name = os.path.dirname(args.model_path).split('/')[-1]
+    config_path = os.path.dirname(args.model_path) + '/config_' + model_name + '.yml'
+    config = yaml.safe_load(open(config_path))
 
     # load PL-BERT model
     BERT_path = config.get('PLBERT_dir', False)
@@ -350,13 +358,9 @@ def main(args):
     create_textgrid_from_tokens(intervals, output_path.replace('.wav', '.TextGrid'))
 
 
-
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
 parser = argparse.ArgumentParser(description='StyleTTS2 Inference')
-parser.add_argument('-c', '--config_path', type=str, default='/home/jovyan/code/StyleTTS2/Models/dailytalk_conv_back/config_dailytalk_conv.yml', help='path to the config file')
-parser.add_argument('-m', '--model_path', type=str, default='/home/jovyan/code/StyleTTS2/Models/dailytalk_conv_back/epoch_2nd_00060.pth', help='path to the model')
-# parser.add_argument('-r', '--ref_wav_path', type=str, default='wavs/dailytalk/12/6_1_d12.wav', help='path to the reference wav file')
+# parser.add_argument('-c', '--config_path', type=str, default='/home/jovyan/code/StyleTTS2/Models/dailytalk_conv_back/config_dailytalk_conv.yml', help='path to the config file')
+parser.add_argument('-m', '--model_path', type=str, default='/home/jovyan/code/StyleTTS2/Models/dailytalk_conversational/epoch_2nd_00090.pth', help='path to the model')
 parser.add_argument('-t', '--text', type=str, default='Fluent was founded in 2021, and is a company that develops technologies that express movements of Generative AI. Currently, the company is focusing on developing TalkMotion AI, an interactive AI virtual human solution.', help='text to synthesize')
 parser.add_argument('--texts', type=str, default='', help='path to the text file to synthesize')
 args = parser.parse_args()
