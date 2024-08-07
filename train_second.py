@@ -526,10 +526,10 @@ def main(config_path):
                      loss_params.lambda_diff * loss_diff
 
             running_loss += loss_mel.item()
-            g_loss.backward()
             if torch.isnan(g_loss):
                 from IPython.core.debugger import set_trace
                 set_trace()
+            g_loss.backward()
 
             optimizer.step('bert')
             optimizer.step('bert_encoder')
