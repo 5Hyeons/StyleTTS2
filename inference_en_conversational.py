@@ -212,12 +212,13 @@ def inference(model, model_params, sampler, text, ref_s, alpha = 0.3, beta = 0.7
             data, model.hgt = data.to(device), model.hgt.to(device)
             out_text = model.hgt(data.x_dict, data.edge_index_dict)
             current_text_tensor = history['text'][-1]
-            q = current_text_tensor.unsqueeze(0).unsqueeze(0)
+            q = current_text_tensor.unsqueeze(0)
             k = v = out_text[:-1].unsqueeze(0)
             s_conv = model.style_predictor(q, k, v)[0] # [1, 1, 256]
 
         else:
-            print('im here')
+            s_conv = torch.zeros((1, 1, 256)).to(device)
+            print('at first')
         # d_en = model.bert_encoder(h_bert).transpose(-1, -2) 
         h_bert = torch.cat([h_bert, s_conv.expand(-1, h_bert.size(1), -1)], dim=-1)
         d_en = model.bert_encoder(h_bert).transpose(-1, -2)
@@ -294,6 +295,7 @@ def main(args):
     model, model_params, sampler = get_model(config, args.model_path, plbert)
 
     texts = []
+    sids = []
     ori_wav_paths = []
     if args.texts:
         with open(args.texts, 'r') as f:
@@ -306,6 +308,20 @@ def main(args):
                 texts.append(line)
                 ori_wav_paths.append(line.split('|')[0])
         output_path = os.path.join('Outputs', args.model_path.split('/')[1], args.texts.split('/')[-1].replace('.txt', '.wav'))
+    elif args.dataset and args.num:
+        dataset = args.dataset
+        num = args.num
+        dialogue_dir = os.path.join(dataset, num)
+        for file in sorted(os.listdir(dialogue_dir), key=lambda x: int(x.split('_')[0])):
+            if file.endswith('.txt'):
+                with open(os.path.join(dialogue_dir, file), 'r') as f:
+                    line = f.readline().strip()
+                    texts.append(line)
+            elif file.endswith('.wav'):
+                ori_wav_paths.append(os.path.join(dialogue_dir, file))
+                sid = file.split('_')[1]
+                sids.append(sid)
+        output_path = os.path.join('Outputs', args.model_path.split('/')[1], f'd_{num}.wav')
     else:
         texts.append(args.text)
         output_path = os.path.join('Outputs', args.model_path.split('/')[1], 'output.wav')
@@ -315,32 +331,45 @@ def main(args):
     silence = np.zeros(int(24000 * 0.5)) # 0.5 sec silence for interval
     wavs.append(silence)
 
-    # ori_wavs = []
-    # ori_wav_dir = '/home/jovyan/datasets/dailytalk'
-    # for ori_wav_path in ori_wav_paths:
-    #     ori_wav_path = os.path.join(ori_wav_dir, ori_wav_path)
-    #     audio, sr = librosa.load(ori_wav_path, sr=24000)
-    #     audio, index = librosa.effects.trim(audio, top_db=30)
-    #     if sr != 24000:
-    #         audio = librosa.resample(audio, sr, 24000)
-    #     audio = np.concatenate([np.zeros([5000]), audio, np.zeros([5000])], axis=0)
-    #     ori_wavs.append(audio)
-    #     ori_wavs.append(silence)
-    # ori_audio = np.concatenate(ori_wavs[:-1], axis=0)
-    # sf.write(output_path.replace('.wav', '_ori.wav'), ori_audio, 24000, format='WAV', subtype='PCM_16')
-
+    ori_wavs = []
+    for ori_wav_path in ori_wav_paths:
+        audio, sr = librosa.load(ori_wav_path, sr=24000)
+        audio, index = librosa.effects.trim(audio, top_db=30)
+        if sr != 24000:
+            audio = librosa.resample(audio, sr, 24000)
+        audio = np.concatenate([np.zeros([5000]), audio, np.zeros([5000])], axis=0)
+        ori_wavs.append(audio)
+        ori_wavs.append(silence)
+    ori_audio = np.concatenate(ori_wavs[:-1], axis=0)
+    sf.write(output_path.replace('.wav', '_ori.wav'), ori_audio, 24000, format='WAV', subtype='PCM_16')
 
     history = {
         "text": [],
         "acoustic": [],
         "prosody": [],
     }
+
+    dialouge_len = len(texts)
     for i, text in enumerate(texts):
+        if args.half and i < dialouge_len//2:
+            text_emb = text_embedder.encode([text.strip()])
+            history['text'].append(torch.tensor(text_emb).to(device))
+            wav_path = ori_wav_paths[i]
+            style = compute_style(wav_path, model)
+            history['acoustic'].append(style[:, :128])
+            history['prosody'].append(style[:, 128:])
+            print(f'continue: {i+1}/{dialouge_len}')
+            continue
+
         start = time.time()
         # _, text, ref_wav_path = text.split('|')
-        text, ref_wav_path = text.split('|')
+        # text, ref_wav_path = text.split('|')
+        if sids[i] == '0':
+            ref_wav_path = 'wavs/dailytalk/72/1_0_d72.wav'
+        elif sids[i] == '1':
+            ref_wav_path = 'wavs/dailytalk/79/4_1_d79.wav'
         ref_s = compute_style(ref_wav_path, model)
-        wav, intervals, s_pred = inference(model, model_params, sampler, text, ref_s, alpha=0.3, beta=0.7, diffusion_steps=16, embedding_scale=1, history=history)
+        wav, intervals, s_pred = inference(model, model_params, sampler, text, ref_s, alpha=0.3, beta=0.7, diffusion_steps=10, embedding_scale=1, history=history)
         s_a = s_pred[:, :128]
         s_p = s_pred[:, 128:]
         history['acoustic'].append(s_a)
@@ -360,9 +389,12 @@ def main(args):
 
 parser = argparse.ArgumentParser(description='StyleTTS2 Inference')
 # parser.add_argument('-c', '--config_path', type=str, default='/home/jovyan/code/StyleTTS2/Models/dailytalk_conv_back/config_dailytalk_conv.yml', help='path to the config file')
-parser.add_argument('-m', '--model_path', type=str, default='/home/jovyan/code/StyleTTS2/Models/dailytalk_conversational/epoch_2nd_00090.pth', help='path to the model')
+parser.add_argument('-m', '--model_path', type=str, default='Models/dailytalk_conversational/epoch_2nd_00090.pth', help='path to the model')
+parser.add_argument('-d', '--dataset', type=str, default='wavs/dailytalk', help='dataset name')
+parser.add_argument('-n', '--num', type=str, default='0', help='dialogue number')
 parser.add_argument('-t', '--text', type=str, default='Fluent was founded in 2021, and is a company that develops technologies that express movements of Generative AI. Currently, the company is focusing on developing TalkMotion AI, an interactive AI virtual human solution.', help='text to synthesize')
 parser.add_argument('--texts', type=str, default='', help='path to the text file to synthesize')
+parser.add_argument('--half', action='store_true', help='inference from the center of the dialogue')
 args = parser.parse_args()
 
 main(args)
