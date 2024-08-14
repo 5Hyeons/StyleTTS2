@@ -341,6 +341,7 @@ def main(args):
         ori_wavs.append(audio)
         ori_wavs.append(silence)
     ori_audio = np.concatenate(ori_wavs[:-1], axis=0)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
     sf.write(output_path.replace('.wav', '_ori.wav'), ori_audio, 24000, format='WAV', subtype='PCM_16')
 
     history = {
