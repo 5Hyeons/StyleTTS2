@@ -16,3 +16,5 @@ typing
 typing-extensions
 git+https://github.com/resemble-ai/monotonic_align.git
 torch_geometric
+phonemizer
+sentence_transformers

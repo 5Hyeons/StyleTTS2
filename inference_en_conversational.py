@@ -390,7 +390,7 @@ def main(args):
 
 parser = argparse.ArgumentParser(description='StyleTTS2 Inference')
 # parser.add_argument('-c', '--config_path', type=str, default='/home/jovyan/code/StyleTTS2/Models/dailytalk_conv_back/config_dailytalk_conv.yml', help='path to the config file')
-parser.add_argument('-m', '--model_path', type=str, default='Models/dailytalk_conversational/epoch_2nd_00090.pth', help='path to the model')
+parser.add_argument('-m', '--model_path', type=str, default='Models/dailytalk_conversational_emotional/epoch_2nd_00080.pth', help='path to the model')
 parser.add_argument('-d', '--dataset', type=str, default='wavs/dailytalk', help='dataset name')
 parser.add_argument('-n', '--num', type=str, default='0', help='dialogue number')
 parser.add_argument('-t', '--text', type=str, default='Fluent was founded in 2021, and is a company that develops technologies that express movements of Generative AI. Currently, the company is focusing on developing TalkMotion AI, an interactive AI virtual human solution.', help='text to synthesize')
