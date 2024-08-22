@@ -14,28 +14,46 @@ from torch import Tensor, einsum
 """
 Utils
 """
-
 class AdaLayerNorm(nn.Module):
     def __init__(self, style_dim, channels, eps=1e-5):
         super().__init__()
         self.channels = channels
         self.eps = eps
 
-        self.fc = nn.Linear(style_dim, channels*2)
+        self.fc = nn.Linear(style_dim, channels * 2)
 
-    def forward(self, x, s):
-        x = x.transpose(-1, -2)
-        x = x.transpose(1, -1)
-                
+    def forward(self, x, s, mask=None):
+        # x: (B, T, C)
+        # s: (B, style_dim)
+        # mask: (B, T), optional
+        
         h = self.fc(s)
-        h = h.view(h.size(0), h.size(1), 1)
+        h = h.view(h.size(0), h.size(1), 1)  # (B, 2C, 1)
         gamma, beta = torch.chunk(h, chunks=2, dim=1)
-        gamma, beta = gamma.transpose(1, -1), beta.transpose(1, -1)
-        
-        
-        x = F.layer_norm(x, (self.channels,), eps=self.eps)
-        x = (1 + gamma) * x + beta
-        return x.transpose(1, -1).transpose(-1, -2)
+        gamma, beta = gamma.transpose(1, -1), beta.transpose(1, -1)  # (B, C, 1)
+
+        if mask is not None:
+            # Expand mask to match (B, T, C)
+            mask = mask.unsqueeze(-1)  # (B, T, 1)
+            
+            # Calculate masked mean and variance
+            mean = (x * mask).sum(dim=1) / mask.sum(dim=1)
+            var = ((x - mean.unsqueeze(1)) ** 2 * mask).sum(dim=1) / mask.sum(dim=1)
+            
+            # Normalize
+            x_normalized = (x - mean.unsqueeze(1)) / torch.sqrt(var.unsqueeze(1) + self.eps)
+            
+            # Apply gamma and beta
+            x_normalized = (1 + gamma) * x_normalized + beta
+            
+            # Apply mask to the final output to ensure masked positions remain zero
+            x_normalized = x_normalized * mask
+        else:
+            # Standard layer norm without mask
+            x = F.layer_norm(x, (self.channels,), eps=self.eps)
+            x_normalized = (1 + gamma) * x + beta
+
+        return x_normalized.transpose(1, -1).transpose(-1, -2)
 
 class StyleTransformer1d(nn.Module):
     def __init__(
@@ -67,6 +85,7 @@ class StyleTransformer1d(nn.Module):
                     use_rel_pos=use_rel_pos,
                     rel_pos_num_buckets=rel_pos_num_buckets,
                     rel_pos_max_distance=rel_pos_max_distance,
+                    context_features=384,
                 )
                 for i in range(num_layers)
             ]
@@ -141,15 +160,14 @@ class StyleTransformer1d(nn.Module):
 
         return mapping
             
-    def run(self, x, time, embedding, features):
+    def run(self, x, time, embedding, features, context, context_mask):
         
         mapping = self.get_mapping(time, features)
         x = torch.cat([x.expand(-1, embedding.size(1), -1), embedding], axis=-1)
         mapping = mapping.unsqueeze(1).expand(-1, embedding.size(1), -1)
-        
         for block in self.blocks:
             x = x + mapping
-            x = block(x, features)
+            x = block(x, features, context=context, context_mask=context_mask)
         
         x = x.mean(axis=1).unsqueeze(1)
         x = self.to_out(x)
@@ -162,6 +180,8 @@ class StyleTransformer1d(nn.Module):
                 embedding_mask_proba: float = 0.0,
                 embedding: Optional[Tensor] = None, 
                 features: Optional[Tensor] = None,
+                context: Optional[Tensor] = None,
+                context_mask: Optional[Tensor] = None,
                embedding_scale: float = 1.0) -> Tensor:
         
         b, device = embedding.shape[0], embedding.device
@@ -175,14 +195,12 @@ class StyleTransformer1d(nn.Module):
 
         if embedding_scale != 1.0:
             # Compute both normal and fixed embedding outputs
-            out = self.run(x, time, embedding=embedding, features=features)
-            out_masked = self.run(x, time, embedding=fixed_embedding, features=features)
+            out = self.run(x, time, embedding=embedding, features=features, context=context, context_mask=context_mask)
+            out_masked = self.run(x, time, embedding=fixed_embedding, features=features, context=context, context_mask=context_mask)
             # Scale conditional output using classifier-free guidance
             return out_masked + (out - out_masked) * embedding_scale
         else:
-            return self.run(x, time, embedding=embedding, features=features)
-        
-        return x
+            return self.run(x, time, embedding=embedding, features=features, context=context, context_mask=context_mask)
 
 
 class StyleTransformerBlock(nn.Module):
@@ -226,10 +244,10 @@ class StyleTransformerBlock(nn.Module):
 
         self.feed_forward = FeedForward(features=features, multiplier=multiplier)
 
-    def forward(self, x: Tensor, s: Tensor, *, context: Optional[Tensor] = None) -> Tensor:
+    def forward(self, x: Tensor, s: Tensor, *, context: Optional[Tensor] = None, context_mask: Optional[Tensor]) -> Tensor:
         x = self.attention(x, s) + x
         if self.use_cross_attention:
-            x = self.cross_attention(x, s, context=context) + x
+            x = self.cross_attention(x, s, context=context, context_mask=context_mask) + x
         x = self.feed_forward(x) + x
         return x
 
@@ -247,10 +265,9 @@ class StyleAttention(nn.Module):
         rel_pos_max_distance: Optional[int] = None,
     ):
         super().__init__()
-        self.context_features = context_features
         mid_features = head_features * num_heads
         context_features = default(context_features, features)
-
+        self.context_features = context_features
         self.norm = AdaLayerNorm(style_dim, features)
         self.norm_context = AdaLayerNorm(style_dim, context_features)
         self.to_q = nn.Linear(
@@ -268,13 +285,13 @@ class StyleAttention(nn.Module):
             rel_pos_max_distance=rel_pos_max_distance,
         )
 
-    def forward(self, x: Tensor, s: Tensor, *, context: Optional[Tensor] = None) -> Tensor:
+    def forward(self, x: Tensor, s: Tensor, *, context: Optional[Tensor] = None, context_mask: Optional[Tensor] = None) -> Tensor:
         assert_message = "You must provide a context when using context_features"
-        assert not self.context_features or exists(context), assert_message
+        # assert not self.context_features or exists(context), assert_message
         # Use context if provided
         context = default(context, x)
         # Normalize then compute q from input and k,v from context
-        x, context = self.norm(x, s), self.norm_context(context, s)
+        x, context = self.norm(x, s), self.norm_context(context, s, context_mask)
         
         q, k, v = (self.to_q(x), *torch.chunk(self.to_kv(context), chunks=2, dim=-1))
         # Compute and return attention

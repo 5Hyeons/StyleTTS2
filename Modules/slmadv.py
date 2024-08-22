@@ -19,28 +19,28 @@ class SLMAdversarialLoss(torch.nn.Module):
         
     def forward(self, iters, y_rec_gt, y_rec_gt_pred, waves, mel_input_length, ref_text, ref_lengths, use_ind, s_trg, ref_s=None):
         text_mask = length_to_mask(ref_lengths).to(ref_text.device)
-        h_bert = self.model.bert(ref_text, attention_mask=(~text_mask).int())
-        style = torch.zeros(h_bert.size(0), 1, 256).to(h_bert.device)
-        bert_dur = torch.cat([h_bert, style.expand(-1, h_bert.size(1), -1)], dim=-1)
+        bert_dur = self.model.bert(ref_text, attention_mask=(~text_mask).int())
         d_en = self.model.bert_encoder(bert_dur).transpose(-1, -2) 
-        # d_en = bert_dur.transpose(-1, -2)
         if use_ind and np.random.rand() < 0.5:
             s_preds = s_trg
         else:
             num_steps = np.random.randint(3, 5)
+            context = torch.zeros(1, 1, 384).to(ref_text.device)
             if ref_s is not None:
                 s_preds = self.sampler(noise = torch.randn_like(s_trg).unsqueeze(1).to(ref_text.device), 
-                      embedding=bert_dur,
-                      embedding_scale=1,
-                               features=ref_s, # reference from the same speaker as the embedding
-                         embedding_mask_proba=0.1,
-                         num_steps=num_steps).squeeze(1)
+                        embedding=bert_dur,
+                        embedding_scale=1,
+                        features=ref_s, # reference from the same speaker as the embedding
+                        context=context,
+                        embedding_mask_proba=0.1,
+                        num_steps=num_steps).squeeze(1)
             else:
                 s_preds = self.sampler(noise = torch.randn_like(s_trg).unsqueeze(1).to(ref_text.device), 
-                      embedding=bert_dur,
-                      embedding_scale=1,
-                         embedding_mask_proba=0.1,
-                         num_steps=num_steps).squeeze(1)
+                        embedding=bert_dur,
+                        embedding_scale=1,
+                        context=context,
+                        embedding_mask_proba=0.1,
+                        num_steps=num_steps).squeeze(1)
             
         s_dur = s_preds[:, 128:]
         s = s_preds[:, :128]
