@@ -25,7 +25,6 @@ class HGT(nn.Module):
         self.lin = Linear(hidden_channels, out_channels)
 
     def forward(self, x_dict, edge_index_dict):
-
         x_dict = {
             node_type: self.lin_dict[node_type](x).relu_()
             for node_type, x in x_dict.items()
@@ -33,8 +32,7 @@ class HGT(nn.Module):
 
         for conv in self.convs:
             x_dict = conv(x_dict, edge_index_dict)
+            
+        out_text = self.lin(x_dict["text"])
 
-        return x_dict["text"]
-
-
-
+        return out_text

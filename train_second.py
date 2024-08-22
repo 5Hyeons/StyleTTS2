@@ -153,7 +153,7 @@ def main(config_path):
                 None, 
                 first_stage_path,
                 load_only_params=True,
-                ignore_modules=['bert', 'bert_encoder', 'predictor', 'predictor_encoder', 'msd', 'mpd', 'wd', 'diffusion']) # keep starting epoch for tensorboard log
+                ignore_modules=['bert', 'bert_encoder', 'predictor', 'predictor_encoder', 'msd', 'mpd', 'wd', 'diffusion', 'hgt']) # keep starting epoch for tensorboard log
 
             # these epochs should be counted from the start epoch
             diff_epoch += start_epoch
@@ -253,7 +253,7 @@ def main(config_path):
 
         _ = [model[key].eval() for key in model]
 
-        model.style_predictor.train()
+        # model.style_predictor.train()
         model.predictor.train()
         model.bert.train()
         model.bert_encoder.train()
@@ -303,70 +303,64 @@ def main(config_path):
             # this operation cannot be done in batch because of the avgpool layer (may need to work on masked avgpool)
             ss = []
             gs = []
-            bert_dur = []
+            contexts = []
             for bib in range(len(mel_input_length)):
-                ### Heterograph-based encoding
-                history = histories[bib]
-                history_len = history["history_len"]
-                if history_len > 0:
-                    current_text_tensor = history["current_text_tensor"]
-                    history_text_tensors = history["history_text_tensors"]
-                    history_text_tensors = torch.stack(history_text_tensors)
-                    history_acoustic_features = history["history_acoustic_features"]
-                    history_ss = []
-                    history_gs = []
-                    for history_acoustic_feature in history_acoustic_features:
-                        history_s = model.predictor_encoder(history_acoustic_feature.unsqueeze(0).unsqueeze(1))
-                        history_ss.append(history_s)
-                        history_s = model.style_encoder(history_acoustic_feature.unsqueeze(0).unsqueeze(1))
-                        history_gs.append(history_s)
-                    history_ss = torch.stack(history_ss).squeeze()
-                    history_gs = torch.stack(history_gs).squeeze()
-                    if history_ss.dim() == 1:
-                        history_ss = history_ss.unsqueeze(0)
-                    if history_gs.dim() == 1:
-                        history_gs = history_gs.unsqueeze(0)
+                if epoch >= diff_epoch:
+                    ### Heterograph-based encoding
+                    history = histories[bib]
+                    history_len = history["history_len"]
+                    if history_len > 0:
+                        current_text_tensor = history["current_text_tensor"]
+                        history_text_tensors = history["history_text_tensors"]
+                        history_text_tensors = torch.stack(history_text_tensors)
+                        history_acoustic_features = history["history_acoustic_features"]
+                        history_ss = []
+                        history_gs = []
+                        for history_acoustic_feature in history_acoustic_features:
+                            history_s = model.predictor_encoder(history_acoustic_feature.unsqueeze(0).unsqueeze(1))
+                            history_ss.append(history_s)
+                            history_s = model.style_encoder(history_acoustic_feature.unsqueeze(0).unsqueeze(1))
+                            history_gs.append(history_s)
+                        history_ss = torch.stack(history_ss).squeeze()
+                        history_gs = torch.stack(history_gs).squeeze()
+                        if history_ss.dim() == 1:
+                            history_ss = history_ss.unsqueeze(0)
+                        if history_gs.dim() == 1:
+                            history_gs = history_gs.unsqueeze(0)
 
-                    data = HeteroData()
-                    data["text"].x = history_text_tensors
-                    data["acoustic"].x = history_ss
-                    data["prosody"].x = history_gs
+                        data = HeteroData()
+                        data["text"].x = history_text_tensors
+                        data["acoustic"].x = history_ss
+                        data["prosody"].x = history_gs
 
-                    edge = []
-                    for _i in range(data["prosody"].x.shape[0]):
-                        for _j in range(data["acoustic"].x.shape[0]):
-                            edge.append([_j, _i])
-                    data["acoustic", "to", "prosody"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
-                    data["acoustic", "to", "acoustic"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
-                    data["prosody", "to", "prosody"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
+                        edge = []
+                        for _i in range(data["prosody"].x.shape[0]):
+                            for _j in range(data["acoustic"].x.shape[0]):
+                                edge.append([_j, _i])
+                        data["acoustic", "to", "prosody"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
+                        data["acoustic", "to", "acoustic"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
+                        data["prosody", "to", "prosody"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
 
-                    edge = []
-                    # the length of the text is one more than the length of the acoustic/prosodic features
-                    for _i in range(data["text"].x.shape[0]):
-                        for _j in range(data["acoustic"].x.shape[0]):
-                            edge.append([_j, _i])
-                    data["acoustic", "to", "text"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
-                    data["prosody", "to", "text"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
+                        edge = []
+                        # the length of the text is one more than the length of the acoustic/prosodic features
+                        for _i in range(data["text"].x.shape[0]):
+                            for _j in range(data["acoustic"].x.shape[0]):
+                                edge.append([_j, _i])
+                        data["acoustic", "to", "text"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
+                        data["prosody", "to", "text"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
 
-                    edge = []
-                    for _i in range(data["text"].x.shape[0]):
-                        for _j in range(data["text"].x.shape[0]):
-                            edge.append([_j, _i])
-                    data["text", "to", "text"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
-                    data = T.ToUndirected()(data)
+                        edge = []
+                        for _i in range(data["text"].x.shape[0]):
+                            for _j in range(data["text"].x.shape[0]):
+                                edge.append([_j, _i])
+                        data["text", "to", "text"].edge_index = torch.tensor(edge).contiguous().transpose(-2, -1)
+                        data = T.ToUndirected()(data)
 
-                    data, model.hgt = data.to(device), model.hgt.to(device)
-                    out_text = model.hgt(data.x_dict, data.edge_index_dict)
-
-                    q = current_text_tensor.unsqueeze(0).unsqueeze(0)
-                    k = v = out_text[:-1].unsqueeze(0)
-                    style = model.style_predictor(q, k, v)[0] # (1, 1, 256)
-                else:
-                    style = torch.zeros(1, 1, 256).to(device)
-
-                h_bert = model.bert(texts[bib].unsqueeze(0), attention_mask=(~text_mask[bib].unsqueeze(0)).int())
-                h_bert = torch.cat([h_bert, style.expand(-1, h_bert.size(1), -1)], dim=-1)
-                bert_dur.append(h_bert)
+                        data, model.hgt = data.to(device), model.hgt.to(device)
+                        context = model.hgt(data.x_dict, data.edge_index_dict) # (H, 384) H means the number of history utterances
+                        contexts.append(context)
+                    else:
+                        contexts.append(torch.zeros(1, 384).to(device))
 
                 # current style
                 mel_length = int(mel_input_length[bib].item())
@@ -376,16 +370,22 @@ def main(config_path):
                 s = model.style_encoder(mel.unsqueeze(0).unsqueeze(1))
                 gs.append(s)
 
-            bert_dur = torch.stack(bert_dur).squeeze()
-            d_en = model.bert_encoder(bert_dur).transpose(-1, -2) 
-            # d_en = bert_dur.transpose(-1, -2)
-            
             s_dur = torch.stack(ss).squeeze()  # global prosodic styles
             gs = torch.stack(gs).squeeze() # global acoustic styles
             s_trg = torch.cat([gs, s_dur], dim=-1).detach() # ground truth for denoiser
             
+            bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
+            d_en = model.bert_encoder(bert_dur).transpose(-1, -2) 
             # denoiser training
             if epoch >= diff_epoch:
+                # context padding
+                context_mask = length_to_mask(torch.tensor([c.size(0) for c in contexts])).to(device) # (B, H)
+                max_context_len = max([c.size(0) for c in contexts])
+                for j in range(len(contexts)):
+                    if contexts[j].size(0) < max_context_len:
+                        contexts[j] = F.pad(contexts[j], (0, 0, 0, max_context_len - contexts[j].size(0)))
+                context = torch.stack(contexts) # historical context
+
                 num_steps = np.random.randint(3, 5)
                 
                 if model_params.diffusion.dist.estimate_sigma_data:
@@ -394,20 +394,24 @@ def main(config_path):
                     
                 if multispeaker:
                     s_preds = sampler(noise = torch.randn_like(s_trg).unsqueeze(1).to(device), 
-                          embedding=bert_dur,
-                          embedding_scale=1,
-                                   features=ref, # reference from the same speaker as the embedding
-                             embedding_mask_proba=0.1,
-                             num_steps=num_steps).squeeze(1)
-                    loss_diff = model.diffusion(s_trg.unsqueeze(1), embedding=bert_dur, features=ref).mean() # EDM loss
+                                embedding=bert_dur,
+                                embedding_scale=1,
+                                features=ref, # reference from the same speaker as the embedding
+                                context=context,
+                                context_mask=~context_mask,
+                                embedding_mask_proba=0.1,
+                                num_steps=num_steps).squeeze(1)
+                    loss_diff = model.diffusion(s_trg.unsqueeze(1), embedding=bert_dur, features=ref, context=context, context_mask=~context_mask).mean() # EDM loss
                     loss_sty = F.l1_loss(s_preds, s_trg.detach()) # style reconstruction loss
                 else:
                     s_preds = sampler(noise = torch.randn_like(s_trg).unsqueeze(1).to(device), 
-                          embedding=bert_dur,
-                          embedding_scale=1,
-                             embedding_mask_proba=0.1,
-                             num_steps=num_steps).squeeze(1)                    
-                    loss_diff = model.diffusion.module.diffusion(s_trg.unsqueeze(1), embedding=bert_dur).mean() # EDM loss
+                                embedding=bert_dur,
+                                embedding_scale=1,
+                                context=context,
+                                context_mask=~context_mask,
+                                embedding_mask_proba=0.1,
+                                num_steps=num_steps).squeeze(1)                    
+                    loss_diff = model.diffusion.module.diffusion(s_trg.unsqueeze(1), embedding=bert_dur, context=context, context_mask=~context_mask).mean() # EDM loss
                     loss_sty = F.l1_loss(s_preds, s_trg.detach()) # style reconstruction loss
             else:
                 loss_sty = 0
@@ -536,7 +540,7 @@ def main(config_path):
             optimizer.step('predictor')
             optimizer.step('predictor_encoder')
             optimizer.step('hgt')
-            optimizer.step('style_predictor')
+            # optimizer.step('style_predictor')
             
             if epoch >= diff_epoch:
                 optimizer.step('diffusion')
@@ -685,13 +689,9 @@ def main(config_path):
                     gs = torch.stack(gs).squeeze()
                     s_trg = torch.cat([s, gs], dim=-1).detach()
 
-                    # bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
-                    h_bert = model.bert(texts, attention_mask=(~text_mask).int())
-                    style = torch.zeros(h_bert.size(0), 1, 256).to(h_bert.device)
-                    bert_dur = torch.cat([h_bert, style.expand(-1, h_bert.size(1), -1)], dim=-1)
-        
+                    bert_dur = model.bert(texts, attention_mask=(~text_mask).int())
                     d_en = model.bert_encoder(bert_dur).transpose(-1, -2) 
-                    # d_en = bert_dur.transpose(-1, -2)
+
                     d, p = model.predictor(d_en, s, 
                                                         input_lengths, 
                                                         s2s_attn_mono, 
@@ -805,18 +805,22 @@ def main(config_path):
                     ref_sp = model.predictor_encoder(ref_mels.unsqueeze(1))
                     ref_s = torch.cat([ref_ss, ref_sp], dim=1)
                     
+                context = torch.zeros(1, 1, 384).to(device)
                 for bib in range(len(d_en)):
+
                     if multispeaker:
                         s_pred = sampler(noise = torch.randn((1, 256)).unsqueeze(1).to(texts.device), 
-                              embedding=bert_dur[bib].unsqueeze(0),
-                              embedding_scale=1,
+                                embedding=bert_dur[bib].unsqueeze(0),
+                                embedding_scale=1,
                                 features=ref_s[bib].unsqueeze(0), # reference from the same speaker as the embedding
-                                 num_steps=5).squeeze(1)
+                                context=context,
+                                num_steps=5).squeeze(1)
                     else:
                         s_pred = sampler(noise = torch.randn((1, 256)).unsqueeze(1).to(texts.device), 
-                              embedding=bert_dur[bib].unsqueeze(0),
-                              embedding_scale=1,
-                                 num_steps=5).squeeze(1)
+                                embedding=bert_dur[bib].unsqueeze(0),
+                                embedding_scale=1,
+                                context=context,
+                                num_steps=5).squeeze(1)
 
                     s = s_pred[:, 128:]
                     ref = s_pred[:, :128]

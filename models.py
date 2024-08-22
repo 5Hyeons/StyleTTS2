@@ -698,23 +698,23 @@ def build_model(args, text_aligner, pitch_extractor, bert):
     style_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # acoustic style encoder
     predictor_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # prosodic style encoder
     
-    style_predictor = StylePredictor(query_dim=512, key_dim=384, num_units=256, num_heads=2)
+    # style_predictor = StylePredictor(query_dim=512, key_dim=384, num_units=256, num_heads=2)
 
     # define diffusion model
     if args.multispeaker:
         transformer = StyleTransformer1d(channels=args.style_dim*2, 
-                                    context_embedding_features=bert.config.hidden_size + 256,
+                                    context_embedding_features=bert.config.hidden_size,
                                     context_features=args.style_dim*2, 
                                     **args.diffusion.transformer)
     else:
         transformer = Transformer1d(channels=args.style_dim*2, 
-                                    context_embedding_features=bert.config.hidden_size + 256,
+                                    context_embedding_features=bert.config.hidden_size,
                                     **args.diffusion.transformer)
     
     diffusion = AudioDiffusionConditional(
         in_channels=1,
         embedding_max_length=bert.config.max_position_embeddings,
-        embedding_features=bert.config.hidden_size + 256,
+        embedding_features=bert.config.hidden_size,
         embedding_mask_proba=args.diffusion.embedding_mask_proba, # Conditional dropout of batch elements,
         channels=args.style_dim*2,
         context_features=args.style_dim*2,
@@ -741,7 +741,7 @@ def build_model(args, text_aligner, pitch_extractor, bert):
     
     nets = Munch(
             bert=bert,
-            bert_encoder=nn.Linear(bert.config.hidden_size + 256, args.hidden_dim),
+            bert_encoder=nn.Linear(bert.config.hidden_size, args.hidden_dim),
 
             predictor=predictor,
             decoder=decoder,
@@ -749,7 +749,7 @@ def build_model(args, text_aligner, pitch_extractor, bert):
 
             predictor_encoder=predictor_encoder,
             style_encoder=style_encoder,
-            style_predictor=style_predictor,
+            # style_predictor=style_predictor,
             diffusion=diffusion,
 
             text_aligner = text_aligner,
