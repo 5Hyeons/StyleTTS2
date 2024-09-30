@@ -8,6 +8,7 @@ import math
 
 import numpy as np
 import torch
+import torchaudio
 import torch.nn as nn
 import torch.nn.functional as F
 # from torch.nn.utils import weight_norm, remove_weight_norm, spectral_norm
@@ -634,59 +635,58 @@ def build_model(args, text_aligner, pitch_extractor, bert):
                 upsample_kernel_sizes=args.decoder.upsample_kernel_sizes) 
         
     text_encoder = TextEncoder(channels=args.hidden_dim, kernel_size=5, depth=args.n_layer, n_symbols=args.n_token)
-    prosodic_text_encoder = TextEncoder(channels=args.hidden_dim, kernel_size=5, depth=args.n_layer, n_symbols=args.n_token)
+    # prosodic_text_encoder = TextEncoder(channels=args.hidden_dim, kernel_size=5, depth=args.n_layer, n_symbols=args.n_token)
     
-    predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=args.hidden_dim, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
+    # predictor = ProsodyPredictor(style_dim=args.style_dim, d_hid=args.hidden_dim, nlayers=args.n_layer, max_dur=args.max_dur, dropout=args.dropout)
     
     style_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # acoustic style encoder
-    predictor_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # prosodic style encoder
+    # predictor_encoder = StyleEncoder(dim_in=args.dim_in, style_dim=args.style_dim, max_conv_dim=args.hidden_dim) # prosodic style encoder
         
     # define diffusion model
-    if args.multispeaker:
-        transformer = StyleTransformer1d(channels=args.style_dim*2, 
-                                    context_embedding_features=args.hidden_dim,
-                                    # context_embedding_features=bert.config.hidden_size,
-                                    context_features=args.style_dim*2, 
-                                    **args.diffusion.transformer)
-    else:
-        transformer = Transformer1d(channels=args.style_dim*2, 
-                                    context_embedding_features=args.hidden_dim,
-                                    # context_embedding_features=bert.config.hidden_size,
-                                    **args.diffusion.transformer)
+    # if args.multispeaker:
+    #     transformer = StyleTransformer1d(channels=args.style_dim*2, 
+    #                                 context_embedding_features=args.hidden_dim,
+    #                                 # context_embedding_features=bert.config.hidden_size,
+    #                                 context_features=args.style_dim*2, 
+    #                                 **args.diffusion.transformer)
+    # else:
+    #     transformer = Transformer1d(channels=args.style_dim*2, 
+    #                                 context_embedding_features=args.hidden_dim,
+    #                                 # context_embedding_features=bert.config.hidden_size,
+    #                                 **args.diffusion.transformer)
     
-    diffusion = AudioDiffusionConditional(
-        in_channels=1,
-        embedding_max_length=args.hidden_dim,
-        # embedding_max_length=bert.config.max_position_embeddings,
-        embedding_features=args.hidden_dim,
-        # embedding_features=bert.config.hidden_size,
-        embedding_mask_proba=args.diffusion.embedding_mask_proba, # Conditional dropout of batch elements,
-        channels=args.style_dim*2,
-        context_features=args.style_dim*2,
-    )
+    # diffusion = AudioDiffusionConditional(
+    #     in_channels=1,
+    #     embedding_max_length=args.hidden_dim,
+    #     # embedding_max_length=bert.config.max_position_embeddings,
+    #     embedding_features=args.hidden_dim,
+    #     # embedding_features=bert.config.hidden_size,
+    #     embedding_mask_proba=args.diffusion.embedding_mask_proba, # Conditional dropout of batch elements,
+    #     channels=args.style_dim*2,
+    #     context_features=args.style_dim*2,
+    # )
     
-    diffusion.diffusion = KDiffusion(
-        net=diffusion.unet,
-        sigma_distribution=LogNormalDistribution(mean = args.diffusion.dist.mean, std = args.diffusion.dist.std),
-        sigma_data=args.diffusion.dist.sigma_data, # a placeholder, will be changed dynamically when start training diffusion model
-        dynamic_threshold=0.0 
-    )
-    diffusion.diffusion.net = transformer
-    diffusion.unet = transformer
-
+    # diffusion.diffusion = KDiffusion(
+    #     net=diffusion.unet,
+    #     sigma_distribution=LogNormalDistribution(mean = args.diffusion.dist.mean, std = args.diffusion.dist.std),
+    #     sigma_data=args.diffusion.dist.sigma_data, # a placeholder, will be changed dynamically when start training diffusion model
+    #     dynamic_threshold=0.0 
+    # )
+    # diffusion.diffusion.net = transformer
+    # diffusion.unet = transformer
     
     nets = Munch(
             # bert=bert,
             # bert_encoder=nn.Linear(bert.config.hidden_size, args.hidden_dim),
 
-            predictor=predictor,
+            # predictor=predictor,
             decoder=decoder,
             text_encoder=text_encoder,
-            prosodic_text_encoder=prosodic_text_encoder,
+            # prosodic_text_encoder=prosodic_text_encoder,
 
-            predictor_encoder=predictor_encoder,
+            # predictor_encoder=predictor_encoder,
             style_encoder=style_encoder,
-            diffusion=diffusion,
+            # diffusion=diffusion,
 
             text_aligner = text_aligner,
             pitch_extractor=pitch_extractor,
@@ -695,7 +695,7 @@ def build_model(args, text_aligner, pitch_extractor, bert):
             msd = MultiResSpecDiscriminator(),
         
             # slm discriminator head
-            wd = WavLMDiscriminator(args.slm.hidden, args.slm.nlayers, args.slm.initial_channel),
+            # wd = WavLMDiscriminator(args.slm.hidden, args.slm.nlayers, args.slm.initial_channel),
        )
     
     return nets

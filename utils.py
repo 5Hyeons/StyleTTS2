@@ -72,3 +72,23 @@ def log_print(message, logger):
     logger.info(message)
     print(message)
     
+
+def to_mel(y, sample_rate=24000, fft_size=2048, win_length=1200, shift_size=300, n_mels=80):
+    device = y.device  
+
+    def window_fn(window_length):
+        return torch.hann_window(window_length).to(device)
+
+    mel_spectrogram = torchaudio.transforms.MelSpectrogram(
+        sample_rate=sample_rate,
+        n_fft=fft_size,
+        win_length=win_length,
+        hop_length=shift_size,
+        window_fn=window_fn,
+        n_mels=n_mels
+    ).to(device)
+
+    mel = mel_spectrogram(y)
+    mean, std = -4, 4
+    mel = (torch.log(1e-5 + mel) - mean) / std
+    return mel.squeeze(1)[:, :, :-1]
