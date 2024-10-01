@@ -142,6 +142,7 @@ def main(config_path):
                 config['pretrained_model'],
                 load_only_params=config.get('load_only_params', True),
                 ) # keep starting epoch for tensorboard log
+            start_epoch += 1
         else:
             start_epoch = 0
             iters = 0
@@ -157,16 +158,22 @@ def main(config_path):
     gl = GeneratorLoss(model.mpd, model.msd).to(device)
     dl = DiscriminatorLoss(model.mpd, model.msd).to(device)
 
+    VC_epoch = loss_params.VC_epoch
+
+    if VC_epoch < 0:
+        VC_epoch = epochs + VC_epoch
+
     for epoch in range(start_epoch, epochs):
         running_loss = 0
         start_time = time.time()
 
-        _ = [model[key].eval() for key in model]
+        # _ = [model[key].eval() for key in model]
+        _ = [model[key].train() for key in model]
 
-        model.style_encoder.train()
-        model.decoder.train()
-        model.msd.train()
-        model.mpd.train()
+        # model.style_encoder.train()
+        # model.decoder.train()
+        # model.msd.train()
+        # model.mpd.train()
 
         for i, batch in enumerate(train_dataloader):
             waves = batch[0]
@@ -241,15 +248,11 @@ def main(config_path):
             s_org = model.style_encoder(st.unsqueeze(1) if multispeaker else gt.unsqueeze(1))
             s_trg = model.style_encoder(ref_mels.unsqueeze(1))
             
-            # y_rec = model.decoder(en, F0_real, N_real, s_org)
+            y_rec = model.decoder(en, F0_real, N_real, s_org)
             y_fake = model.decoder(en, F0_real, N_real, s_trg)
 
             mel_fake = to_mel(y_fake)
-            with torch.no_grad():
-                F0_fake, _, _ = model.pitch_extractor(mel_fake.unsqueeze(1))
-                N_fake = log_norm(mel_fake.unsqueeze(1)).squeeze(1)
 
-            y_cyc = model.decoder(en, F0_fake, N_fake, s_org)
             
             # style loss
             s_pred = model.style_encoder(mel_fake.unsqueeze(1))
@@ -258,25 +261,47 @@ def main(config_path):
             # cycle consistency adversarial loss
             # discriminator loss
             optimizer.zero_grad()
-            d_loss_cyc = dl(wav.detach().unsqueeze(1).float(), y_cyc.detach()).mean()
-            accelerator.backward(d_loss_cyc)
+            d_loss = dl(wav.detach().unsqueeze(1).float(), y_rec.detach()).mean()
+            accelerator.backward(d_loss)
             optimizer.step('msd')
             optimizer.step('mpd')
 
             # generator loss
             optimizer.zero_grad()
-            loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_cyc).mean()
+            loss_mel = stft_loss(y_rec.squeeze(), wav.detach())
+            loss_gen_all = gl(wav.detach().unsqueeze(1).float(), y_rec).mean()
 
             # cycle consistency mel loss
-            loss_mel_cyc = stft_loss(y_cyc.squeeze(), wav.detach())
+            if epoch >= VC_epoch:
+                # norm loss
+                N_fake = log_norm(mel_fake.unsqueeze(1)).squeeze(1)
+                loss_norm = ((torch.nn.ReLU()(torch.abs(N_fake - N_real) - 0.5))**2).mean()
+
+                # F0 loss
+                F0_fake, _, _ = model.pitch_extractor(mel_fake.unsqueeze(1))
+                loss_f0 = f0_loss(F0_fake, F0_real)
+
+                # ASR loss
+                asr_real = model.text_aligner.get_feature(gt)
+                asr_fake = model.text_aligner.get_feature(mel_fake)
+                loss_asr = torch.mean(torch.abs(asr_real - asr_fake))
+
+                loss_feat = loss_norm + loss_f0 + loss_asr
+
+                y_cyc = model.decoder(en, F0_fake, N_fake, s_org)
+                loss_cyc = stft_loss(y_cyc.squeeze(), wav.detach())
+            else:
+                loss_cyc = 0
+                loss_feat = 0
             
-            g_loss = \
-            loss_params.lambda_mel * loss_mel_cyc + \
+            g_loss = loss_params.lambda_mel * loss_mel + \
+            loss_params.lambda_gen * loss_gen_all + \
             loss_params.lambda_sty * loss_sty + \
-            loss_params.lambda_gen * loss_gen_all
+            loss_params.lambda_mel * loss_cyc + \
+            loss_params.lambda_feat * loss_feat
 
             
-            running_loss += accelerator.gather(loss_mel_cyc).mean().item()
+            running_loss += accelerator.gather(loss_mel).mean().item()
 
             accelerator.backward(g_loss)
             
@@ -286,13 +311,15 @@ def main(config_path):
             iters = iters + 1
             
             if (i+1)%log_interval == 0 and accelerator.is_main_process:
-                log_print ('Epoch [%d/%d], Step [%d/%d], Mel Cyc Loss: %.5f, Gen Loss: %.5f, Disc Loss: %.5f, Sty Loss: %.5f'
-                        %(epoch+1, epochs, i+1, len(train_list)//batch_size, running_loss / log_interval, loss_gen_all, d_loss_cyc, loss_sty), logger)
+                log_print ('Epoch [%d/%d], Step [%d/%d], Mel Loss: %.5f, Gen Loss: %.5f, Disc Loss: %.5f, Sty Loss: %.5f, Feat Loss: %.5f, Cycle Loss: %.5f'
+                        %(epoch+1, epochs, i+1, len(train_list)//batch_size, running_loss / log_interval, loss_gen_all, d_loss, loss_sty, loss_feat, loss_cyc), logger)
                 
                 writer.add_scalar('train/mel_cyc_loss', running_loss / log_interval, iters)
                 writer.add_scalar('train/gen_loss', loss_gen_all, iters)
-                writer.add_scalar('train/d_loss', d_loss_cyc, iters)
+                writer.add_scalar('train/d_loss', d_loss, iters)
                 writer.add_scalar('train/sty_loss', loss_sty, iters)
+                writer.add_scalar('train/feat_loss', loss_feat, iters)
+                writer.add_scalar('train/cyc_loss', loss_cyc, iters)
 
                 running_loss = 0
                 

@@ -92,3 +92,21 @@ def to_mel(y, sample_rate=24000, fft_size=2048, win_length=1200, shift_size=300,
     mean, std = -4, 4
     mel = (torch.log(1e-5 + mel) - mean) / std
     return mel.squeeze(1)[:, :, :-1]
+
+
+# for F0 consistency loss
+def compute_mean_f0(f0):
+    f0_mean = f0.mean(-1)
+    f0_mean = f0_mean.expand(f0.shape[-1], f0_mean.shape[0]).transpose(0, 1) # (B, M)
+    return f0_mean
+
+def f0_loss(x_f0, y_f0):
+    """
+    x.shape = (B, 1, M, L): predict
+    y.shape = (B, 1, M, L): target
+    """
+    # compute the mean
+    x_mean = compute_mean_f0(x_f0)
+    y_mean = compute_mean_f0(y_f0)
+    loss = F.l1_loss(x_f0 / x_mean, y_f0 / y_mean)
+    return loss
