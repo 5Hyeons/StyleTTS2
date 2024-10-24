@@ -62,6 +62,7 @@ def main(config_path):
     
     epochs = config.get('epochs_1st', 200)
     save_freq = config.get('save_freq', 2)
+    save_interval = config.get('save_interval', 36000)
     log_interval = config.get('log_interval', 10)
     saving_epoch = config.get('save_freq', 2)
     
@@ -152,6 +153,7 @@ def main(config_path):
         if config.get('pretrained_model', '') != '':
             model, optimizer, start_epoch, iters = load_checkpoint(model,  optimizer, config['pretrained_model'],
                                         load_only_params=config.get('load_only_params', True))
+            start_epoch += 1
         else:
             start_epoch = 0
             iters = 0
@@ -321,6 +323,18 @@ def main(config_path):
                 running_loss = 0
                 
                 print('Time elasped:', time.time()-start_time)
+            
+            if (i+1) % save_interval == 0:
+                print('Saving..')
+                state = {
+                    'net':  {key: model[key].state_dict() for key in model}, 
+                    'optimizer': optimizer.state_dict(),
+                    'iters': iters,
+                    'epoch': epoch,
+                }
+                save_path = osp.join(log_dir, 'epoch_1st_%05d_batch_%02d_step_%05d.pth' % (epoch, batch_size, i))
+                torch.save(state, save_path)
+                                
                                 
         loss_test = 0
 

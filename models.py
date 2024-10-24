@@ -602,8 +602,11 @@ def load_ASR_models(ASR_MODEL_PATH, ASR_MODEL_CONFIG):
 
     def _load_model(model_config, model_path):
         model = ASRCNN(**model_config)
-        params = torch.load(model_path, map_location='cpu')['model']
-        model.load_state_dict(params)
+        if osp.exists(model_path):
+            params = torch.load(model_path, map_location='cpu')['model']
+            model.load_state_dict(params)
+        else:
+            print('No model found in %s, use scratch.' % model_path)
         return model
 
     asr_model_config = _load_config(ASR_MODEL_CONFIG)
