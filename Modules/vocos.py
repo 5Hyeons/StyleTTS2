@@ -382,8 +382,8 @@ class Generator(Backbone):
         layer_scale_init_value = layer_scale_init_value or 1 / num_layers
 
         self.m_source = SourceModuleHnNSF(
-                    sampling_rate=24000//gen_istft_hop_size,
-                    upsample_scale=1,
+                    sampling_rate=24000,
+                    upsample_scale=gen_istft_hop_size,
                     harmonic_num=8, voiced_threshod=10)
         self.f0_upsamp = torch.nn.Upsample(scale_factor=gen_istft_hop_size)
         self.noise_convs = nn.ModuleList()
@@ -393,9 +393,13 @@ class Generator(Backbone):
         for i in range(num_layers):
             # Add Conv1d for noise injection
             self.noise_convs.append(
-                nn.Conv1d(1, dim, kernel_size=3, padding=1)
-                # nn.Conv1d(gen_istft_n_fft + 2, dim, kernel_size=3, padding=1)
+                nn.Conv1d(gen_istft_n_fft + 2, dim, kernel_size=1)
+                # nn.Conv1d(gen_istft_n_fft + 2, dim, kernel_size=300 * 2, stride=300, padding=(300+1)//2)
             )
+            # self.noise_convs.append(
+                # nn.Conv1d(1, dim, kernel_size=3, padding=1)
+            #     nn.Conv1d(dim, dim, kernel_size=10 * 2, stride=10, padding=(10+1)//2)
+            # )
             # Add residual blocks for conditioning noise with style
             self.noise_res.append(
                 AdaINResBlock1(dim, 3, [1, 3, 5], style_dim)
@@ -414,7 +418,7 @@ class Generator(Backbone):
         self.final_layer_norm = nn.LayerNorm(dim, eps=1e-6)
         self.apply(self._init_weights)
         self.reflection_pad = torch.nn.ReflectionPad1d((1, 0))
-        self.stft = ISTFTHead(dim=dim, n_fft=gen_istft_n_fft, hop_length=gen_istft_hop_size, padding="same")
+        self.stft = ISTFTHead(dim=dim, n_fft=gen_istft_n_fft, hop_length=gen_istft_hop_size, padding="center")
 
     def _init_weights(self, m):
         if isinstance(m, (nn.Conv1d, nn.Linear)):
@@ -422,21 +426,20 @@ class Generator(Backbone):
             nn.init.constant_(m.bias, 0)
 
     def forward(self, x, s, f0) -> torch.Tensor:
-        # with torch.no_grad():
-        #     f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)
-
-        har_source, noi_source, uv = self.m_source(f0.unsqueeze(-1))
-        har_source = har_source.transpose(1, 2)
-            # har_source, noi_source, uv = self.m_source(f0)
-        # har_source = har_source.transpose(1, 2).squeeze(1)
-            # har_spec, har_phase = self.stft.transform(har_source)
-            # har = torch.cat([har_spec, har_phase], dim=1)
+        with torch.no_grad():
+            f0 = self.f0_upsamp(f0[:, None]).transpose(1, 2)
+            har_source, noi_source, uv = self.m_source(f0)
+            har_source = har_source.transpose(1, 2).squeeze(1)
+            har_spec, har_phase = self.stft.transform(har_source)
+            har = torch.cat([har_spec, har_phase], dim=1)
         
+        x = self.reflection_pad(x) 
         for i, conv_block in enumerate(self.convnext):
-            x_source = self.noise_convs[i](har_source)
+            # from pdb import set_trace
+            # set_trace()
+            x_source = self.noise_convs[i](har)
             x_source = self.noise_res[i](x_source, s)
-
-            # x = self.reflection_pad(x)
+            
             x = x + x_source
             x = conv_block(x, s)
         x = self.final_layer_norm(x.transpose(1, 2))
