@@ -20,28 +20,7 @@ logger.setLevel(logging.DEBUG)
 
 import pandas as pd
 
-# _pad = "$"
-# _punctuation = ';:,.!?¡¿—…"«»“” '
-# _letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
-# _letters_ipa = "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
-
-# # Export all symbols:
-# symbols = [_pad] + list(_punctuation) + list(_letters) + list(_letters_ipa)
-
-
-PAD = '_'
-BOS = '<bos>'
-EOS = '<eos>'
-PUNC = '!?\'\"().,-=:;^&*~'
-SPACE = ' '
-_SILENCES = ['sp', 'spn', 'sil']
-
-JAMO_LEADS = "".join([chr(_) for _ in range(0x1100, 0x1113)])
-JAMO_VOWELS = "".join([chr(_) for _ in range(0x1161, 0x1176)])
-JAMO_TAILS = "".join([chr(_) for _ in range(0x11A8, 0x11C3)])
-
-VALID_CHARS = JAMO_LEADS + JAMO_VOWELS + JAMO_TAILS + PUNC + SPACE
-symbols = [PAD] + [BOS] + [EOS] + list(VALID_CHARS) + _SILENCES
+from symbols import symbols
 
 #---
 dicts = {}
@@ -53,6 +32,10 @@ class TextCleaner:
         self.word_index_dictionary = dicts
     def __call__(self, text):
         indexes = []
+        if text[:4] == '<jp>':
+            text = text[4:].split()
+        elif text[:4] == '<zh>':
+            text = text[4:].split()
         for char in text:
             try:
                 indexes.append(self.word_index_dictionary[char])
@@ -159,6 +142,8 @@ class FilePathDataset(torch.utils.data.Dataset):
     def _load_tensor(self, data):
         wave_path, text, speaker_id = data
         # speaker_id = int(speaker_id)
+        if not os.path.exists(osp.join(self.root_path, wave_path)):
+            print(f"File not found: {wave_path}")
         wave, sr = sf.read(osp.join(self.root_path, wave_path))
         if wave.shape[-1] == 2:
             wave = wave[:, 0].squeeze()

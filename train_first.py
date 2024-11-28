@@ -62,6 +62,7 @@ def main(config_path):
     
     epochs = config.get('epochs_1st', 200)
     save_freq = config.get('save_freq', 2)
+    save_interval = config.get('save_interval', 36000)
     log_interval = config.get('log_interval', 10)
     saving_epoch = config.get('save_freq', 2)
     
@@ -152,9 +153,16 @@ def main(config_path):
         if config.get('pretrained_model', '') != '':
             model, optimizer, start_epoch, iters = load_checkpoint(model,  optimizer, config['pretrained_model'],
                                         load_only_params=config.get('load_only_params', True))
+            if 'step' in config['pretrained_model']:
+                start_step = int(re.search('step_(.*?).pth', config['pretrained_model']).group(1)) + 2
+                print('Start step:', start_step)
+            else:
+                start_epoch += 1
+                start_step = 0
         else:
             start_epoch = 0
             iters = 0
+            start_step = 0
     
     # in case not distributed
     try:
@@ -176,8 +184,13 @@ def main(config_path):
         start_time = time.time()
 
         _ = [model[key].train() for key in model]
-
-        for i, batch in enumerate(train_dataloader):
+        if epoch > start_epoch:
+            start_step = 0
+        
+        for i, batch in enumerate(train_dataloader, start=start_step):
+            if i == len(train_dataloader):
+                print(f'Break at {i}')
+                break
             waves = batch[0]
             batch = [b.to(device) for b in batch[1:]]
             texts, input_lengths, _, _, mels, mel_input_length, _ = batch
@@ -321,6 +334,18 @@ def main(config_path):
                 running_loss = 0
                 
                 print('Time elasped:', time.time()-start_time)
+            
+            if (i+1) % save_interval == 0:
+                print('Saving..')
+                state = {
+                    'net':  {key: model[key].state_dict() for key in model}, 
+                    'optimizer': optimizer.state_dict(),
+                    'iters': iters,
+                    'epoch': epoch,
+                }
+                save_path = osp.join(log_dir, 'epoch_1st_%05d_batch_%02d_step_%05d.pth' % (epoch, batch_size, i))
+                torch.save(state, save_path)
+                                
                                 
         loss_test = 0
 

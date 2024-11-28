@@ -1,5 +1,5 @@
 # load packages
-import random
+import re
 import yaml
 import time
 from munch import Munch
@@ -72,11 +72,12 @@ def main(config_path):
 
     epochs = config.get('epochs_2nd', 200)
     save_freq = config.get('save_freq', 2)
+    save_interval = config.get('save_interval', 36000)
     log_interval = config.get('log_interval', 10)
     saving_epoch = config.get('save_freq', 2)
 
     data_params = config.get('data_params', None)
-    sr = config['preprocess_params'].get('sr', 24000)
+    sr = config['preprocess_params'].get('sr', 36000)
     train_path = data_params['train_data']
     val_path = data_params['val_data']
     root_path = data_params['root_path']
@@ -218,6 +219,16 @@ def main(config_path):
     if load_pretrained:
         model, optimizer, start_epoch, iters = load_checkpoint(model,  optimizer, config['pretrained_model'],
                                     load_only_params=config.get('load_only_params', True))
+        if 'step' in config['pretrained_model']:
+                start_step = int(re.search('step_(.*?).pth', config['pretrained_model']).group(1)) + 2
+                print('Start step:', start_step)
+        else:
+            start_epoch += 1
+            start_step = 0
+    else:
+        start_epoch = 0
+        iters = 0
+        start_step = 0
         
     n_down = model.text_aligner.n_down
 
@@ -576,6 +587,18 @@ def main(config_path):
                 running_loss = 0
                 
                 print('Time elasped:', time.time()-start_time)
+            
+            if (i+1) % save_interval == 0:
+                print('Saving..')
+                state = {
+                    'net':  {key: model[key].state_dict() for key in model}, 
+                    'optimizer': optimizer.state_dict(),
+                    'iters': iters,
+                    'epoch': epoch,
+                }
+                save_path = osp.join(log_dir, 'epoch_2nd_%05d_batch_%02d_step_%05d.pth' % (epoch, batch_size, i))
+                torch.save(state, save_path)
+                                
                 
         loss_test = 0
         loss_align = 0
