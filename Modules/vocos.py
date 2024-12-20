@@ -384,10 +384,11 @@ class Generator(Backbone):
         layer_scale_init_value = layer_scale_init_value or 1 / num_layers
 
         self.m_source = SourceModuleHnNSF(
-                    sampling_rate=24000//gen_istft_hop_size,
+                    # sampling_rate=24000//gen_istft_hop_size,
+                    sampling_rate=24000,
                     upsample_scale=1,
                     harmonic_num=8, voiced_threshod=10)
-        self.f0_upsamp = torch.nn.Upsample(scale_factor=gen_istft_hop_size)
+        # self.f0_upsamp = torch.nn.Upsample(scale_factor=gen_istft_hop_size)
         self.noise_convs = nn.ModuleList()
         self.noise_res = nn.ModuleList()
         self.convnext = nn.ModuleList()
